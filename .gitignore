@@ -1,0 +1,31 @@
+# Python virtual environments
+.venv/
+venv/
+
+# IDE and editor
+.idea/
+.vscode/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Node.js
+node_modules/
+dist/
+build/
+npm-debug.log*
+
+# Env files (на прод они не должны попадать)
+.env
+.env.*
+!.env.example   # но .env.example как шаблон можно коммитить
+.env.dev
+
+# Logs
+logs/
+*.log
+
+# System
+.DS_Store
+Thumbs.db
