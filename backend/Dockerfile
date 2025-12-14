@@ -3,16 +3,20 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Ставим зависимости для psycopg2
 RUN apt-get update && apt-get install -y \
     build-essential \
     libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/*
 
+# Ставим зависимости
 COPY requirements.txt .
-
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Копируем Alembic-конфиг и миграции
+COPY alembic.ini ./alembic.ini
+COPY migrations ./migrations
+
+# Копируем приложение
 COPY app ./app
 
 ENV PYTHONUNBUFFERED=1
