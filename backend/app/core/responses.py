@@ -1,40 +1,32 @@
-# app/core/responses.py
-"""
-Общий формат ответов API.
-
-Успех:
-{
-  "ok": true,
-  "result": {...}
-}
-
-Ошибка:
-{
-  "ok": false,
-  "error": {
-    "code": "SOME_ERROR_CODE",
-    "message": "Человекочитаемое сообщение",
-    "details": {...}  # необязательно
-  }
-}
-"""
-
+# backend/app/core/responses.py
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
-from fastapi import status
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
+from starlette.status import HTTP_200_OK
 
 
-def success_response(data: Any, status_code: int = status.HTTP_200_OK) -> JSONResponse:
-    """Обёртка для успешных ответов."""
+def success_response(
+    result: Any = None,
+    status_code: int = HTTP_200_OK,
+) -> JSONResponse:
+    """
+    Обёртка для успешного ответа в едином формате:
+    {
+      "ok": true,
+      "result": ...
+    }
+    jsonable_encoder конвертирует datetime/date/Decimal в JSON-совместимый вид.
+    """
+    payload: Dict[str, Any] = {"ok": True}
+    if result is not None:
+        payload["result"] = result
+
     return JSONResponse(
         status_code=status_code,
-        content={
-            "ok": True,
-            "result": data,
-        },
+        content=jsonable_encoder(payload),
     )
 
 
@@ -42,18 +34,33 @@ def error_response(
     *,
     error_code: str,
     message: str,
-    status_code: int = status.HTTP_400_BAD_REQUEST,
-    details: Optional[dict[str, Any]] = None,
+    status_code: int,
+    details: Optional[dict] = None,
 ) -> JSONResponse:
-    """Обёртка для ответов с ошибкой."""
-    payload: dict[str, Any] = {
-        "ok": False,
-        "error": {
-            "code": error_code,
-            "message": message,
-        },
+    """
+    Обёртка для ошибок:
+    {
+      "ok": false,
+      "error": {
+        "code": "...",
+        "message": "...",
+        "details": { ... }  # опционально
+      }
     }
-    if details:
-        payload["error"]["details"] = details
+    """
+    error_obj: Dict[str, Any] = {
+        "code": error_code,
+        "message": message,
+    }
+    if details is not None:
+        error_obj["details"] = details
 
-    return JSONResponse(status_code=status_code, content=payload)
+    payload = {
+        "ok": False,
+        "error": error_obj,
+    }
+
+    return JSONResponse(
+        status_code=status_code,
+        content=jsonable_encoder(payload),
+    )
