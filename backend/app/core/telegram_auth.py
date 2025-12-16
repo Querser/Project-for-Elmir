@@ -1,5 +1,4 @@
-# app/core/telegram_auth.py
-
+# backend/app/core/telegram_auth.py
 from __future__ import annotations
 
 import json
@@ -11,24 +10,26 @@ from hmac import new as hmac_new
 from typing import Any, Dict, Optional
 from urllib.parse import unquote
 
-from sqlalchemy.orm import Session
-
 from app.core.exceptions import AppException
-from app.models import User
 
 logger = logging.getLogger("app.telegram")
 
 
 @dataclass
 class TelegramInitData:
-    raw: str
-    data: Dict[str, str]
-    user: Optional[Dict[str, Any]]
-    auth_date: Optional[int]
+    """
+    Разобранные и провалидированные данные initData.
+    """
+    raw: str                   # исходная строка
+    data: Dict[str, str]       # все пары key -> value (уже unquote)
+    user: Optional[Dict[str, Any]]  # JSON user из Telegram, если есть
+    auth_date: Optional[int]   # timestamp auth_date, если есть
 
 
 class TelegramAuthError(AppException):
-    """Исключение при ошибках валидации Telegram initData."""
+    """
+    Ошибка валидации Telegram initData.
+    """
 
     def __init__(self, message: str = "Невалидные данные авторизации Telegram") -> None:
         super().__init__(
@@ -38,21 +39,49 @@ class TelegramAuthError(AppException):
         )
 
 
-def parse_and_validate_init_data(
+def _build_data_check_string(data: Dict[str, str]) -> str:
+    """
+    Строка для подписи: key=value по всем ключам, отсортированным по алфавиту.
+    """
+    return "\n".join(f"{key}={data[key]}" for key in sorted(data.keys()))
+
+
+def _compute_hash(data: Dict[str, str], bot_token: str) -> str:
+    """
+    Вычисляем hash так же, как описано в документации Telegram Web Apps.
+
+    Эту же функцию используем в tools/generate_init_data.py.
+    """
+    if not bot_token:
+        raise RuntimeError("TELEGRAM_BOT_TOKEN не задан")
+
+    data_check_string = _build_data_check_string(data)
+
+    # секретный ключ HMAC
+    secret_key = hmac_new(
+        "WebAppData".encode("utf-8"),
+        bot_token.encode("utf-8"),
+        sha256,
+    ).digest()
+
+    # финальный hash
+    return hmac_new(
+        secret_key,
+        data_check_string.encode("utf-8"),
+        sha256,
+    ).hexdigest()
+
+
+def validate_telegram_init_data(
     init_data: str,
     bot_token: str,
     *,
     max_age_seconds: int = 24 * 60 * 60,
 ) -> TelegramInitData:
     """
-    Валидирует initData, полученный из Telegram.WebApp.initData.
+    Разбор и валидация initData из Telegram.WebApp.initData.
 
-    Алгоритм:
-    - парсим query-строку key=value&key2=value2...
-    - отделяем hash;
-    - по остальным key=value строим data_check_string (сортировка по ключу, разделитель '\n');
-    - считаем секретный ключ: HMAC_SHA256("WebAppData", bot_token);
-    - считаем подпись HMAC_SHA256(data_check_string, secret_key) и сравниваем с hash.
+    Возвращает TelegramInitData с разобранными полями и user-объектом.
     """
 
     if not init_data:
@@ -61,49 +90,36 @@ def parse_and_validate_init_data(
     if not bot_token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN не задан в окружении")
 
-    hash_value = ""
     data_dict: Dict[str, str] = {}
+    hash_value = ""
 
-    # initData — строка вида key=value&key2=value2...
+    # Строка формата: key=value&key2=value2...
     for chunk in init_data.split("&"):
         if not chunk:
             continue
+
         try:
             key, value = chunk.split("=", 1)
         except ValueError:
-            # странный кусок, пропускаем
+            # странный кусок, без '=' — пропускаем
             continue
 
         if key == "hash":
             hash_value = value
             continue
 
+        # Сохраняем уже *декодированное* значение
         data_dict[key] = unquote(value)
 
     if not hash_value:
         raise TelegramAuthError("В initData отсутствует параметр hash")
 
-    # Строка для подписи
-    data_check_string = "\n".join(
-        f"{key}={data_dict[key]}" for key in sorted(data_dict.keys())
-    )
-
-    # Считаем секретный ключ и подпись
-    secret_key = hmac_new(
-        "WebAppData".encode("utf-8"),
-        bot_token.encode("utf-8"),
-        sha256,
-    ).digest()
-    data_check = hmac_new(
-        secret_key,
-        data_check_string.encode("utf-8"),
-        sha256,
-    ).hexdigest()
-
-    if data_check != hash_value:
+    # Проверяем подпись
+    expected_hash = _compute_hash(data_dict, bot_token)
+    if expected_hash != hash_value:
         raise TelegramAuthError("Подпись Telegram недействительна")
 
-    # Контроль срока действия auth_date
+    # Проверяем "возраст" auth_date
     auth_ts: Optional[int] = None
     if "auth_date" in data_dict:
         try:
@@ -113,8 +129,12 @@ def parse_and_validate_init_data(
                 if now_ts - auth_ts > max_age_seconds:
                     raise TelegramAuthError("Сессия Telegram истекла")
         except ValueError:
-            logger.warning("Не удалось распарсить auth_date: %s", data_dict["auth_date"])
+            logger.warning(
+                "Не удалось распарсить auth_date: %s",
+                data_dict["auth_date"],
+            )
 
+    # Разбираем user (JSON)
     user_dict: Optional[Dict[str, Any]] = None
     if "user" in data_dict:
         try:
@@ -122,47 +142,9 @@ def parse_and_validate_init_data(
         except json.JSONDecodeError:
             logger.warning("Не удалось распарсить поле user из initData")
 
-    return TelegramInitData(raw=init_data, data=data_dict, user=user_dict, auth_date=auth_ts)
-
-
-def get_or_create_user(db: Session, tg_init: TelegramInitData) -> User:
-    """
-    Создаёт или обновляет запись пользователя в БД по данным из Telegram.
-    """
-    if not tg_init.user or "id" not in tg_init.user:
-        raise TelegramAuthError("В initData отсутствует информация о пользователе")
-
-    tg_user = tg_init.user
-    telegram_id = int(tg_user["id"])
-    username = tg_user.get("username")
-    first_name = tg_user.get("first_name")
-    last_name = tg_user.get("last_name")
-
-    user = db.query(User).filter(User.telegram_id == telegram_id).first()
-    if user is None:
-        user = User(
-            telegram_id=telegram_id,
-            username=username,
-            first_name=first_name,
-            last_name=last_name,
-            is_active=True,
-        )
-        db.add(user)
-        db.flush()
-        logger.info("Создан новый пользователь Telegram id=%s db_id=%s", telegram_id, user.id)
-    else:
-        changed = False
-        if username and user.username != username:
-            user.username = username
-            changed = True
-        if first_name and user.first_name != first_name:
-            user.first_name = first_name
-            changed = True
-        if last_name and user.last_name != last_name:
-            user.last_name = last_name
-            changed = True
-
-        if changed:
-            logger.info("Обновлены данные пользователя Telegram id=%s db_id=%s", telegram_id, user.id)
-
-    return user
+    return TelegramInitData(
+        raw=init_data,
+        data=data_dict,
+        user=user_dict,
+        auth_date=auth_ts,
+    )

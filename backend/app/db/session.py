@@ -1,25 +1,33 @@
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-import os
+# backend/app/db/session.py
+from __future__ import annotations
 
-# Временно используем localhost для БД.
-# Позже переключим на docker-контейнер (db) через переменные окружения.
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql+psycopg2://postgres:postgres@localhost:5432/volleyball_db"
+from typing import Generator
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+
+from app.core.config import settings
+
+# В Docker backend должен ходить к контейнеру PostgreSQL по имени сервиса: volleyball_db.
+SQLALCHEMY_DATABASE_URL = (
+    settings.database_url
+    or "postgresql+psycopg://postgres:postgres@volleyball_db:5432/volleyball_db"
 )
 
-# Создаем синхронный engine (psycopg2)
-engine = create_engine(DATABASE_URL, echo=False, future=True)
+engine = create_engine(
+    SQLALCHEMY_DATABASE_URL,
+    future=True,
+    pool_pre_ping=True,
+)
 
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+SessionLocal = sessionmaker(
+    autocommit=False,
+    autoflush=False,
+    bind=engine,
+)
 
 
-def get_db():
-    """
-    Зависимость FastAPI для получения сессии БД.
-    Каждый запрос будет получать свою сессию и корректно её закрывать.
-    """
+def get_db() -> Generator[Session, None, None]:
     db = SessionLocal()
     try:
         yield db
