@@ -1,7 +1,7 @@
 # backend/app/api/v1/__init__.py
 from fastapi import APIRouter
 
-from app.api.v1 import system, profile, trainings
+from app.api.v1 import system, profile, trainings, enrollments
 
 api_router = APIRouter()
 
@@ -13,3 +13,6 @@ api_router.include_router(profile.router, tags=["profile"])
 
 # Роуты тренировок и расписания
 api_router.include_router(trainings.router)
+
+# Роуты записей на тренировки (основа/резерв)
+api_router.include_router(enrollments.router)

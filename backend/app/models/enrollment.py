@@ -1,4 +1,4 @@
-# app/models/enrollment.py
+# backend/app/models/enrollment.py
 from datetime import datetime
 import enum
 
@@ -43,12 +43,16 @@ class Enrollment(Base):
         nullable=False,
     )
 
+    # False = основа, True = резерв
     is_reserve: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
     status: Mapped[EnrollmentStatus] = mapped_column(
         Enum(EnrollmentStatus),
         nullable=False,
         default=EnrollmentStatus.ACTIVE,
     )
+
+    # факт оплаты (пока просто флажок, дальше увяжем с платежами)
     is_paid: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     created_at: Mapped[datetime] = mapped_column(

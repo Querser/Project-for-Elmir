@@ -1,4 +1,4 @@
-# app/models/user.py
+# backend/app/models/user.py
 from __future__ import annotations
 
 from datetime import date, datetime
