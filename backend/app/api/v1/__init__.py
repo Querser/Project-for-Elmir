@@ -1,18 +1,31 @@
-# backend/app/api/v1/__init__.py
+# app/api/v1/__init__.py
 from fastapi import APIRouter
 
-from app.api.v1 import system, profile, trainings, enrollments
+from app.api.v1 import (
+    system,
+    profile,
+    trainings,
+    enrollments,
+    levels,
+    ratings,
+)
 
 api_router = APIRouter()
 
 # Системные/тестовые ручки
 api_router.include_router(system.router, tags=["system"])
 
-# Роуты профиля пользователя
+# Профиль пользователя
 api_router.include_router(profile.router, tags=["profile"])
 
-# Роуты тренировок и расписания
+# Тренировки и расписание
 api_router.include_router(trainings.router)
 
-# Роуты записей на тренировки (основа/резерв)
+# Записи на тренировки (основа/резерв)
 api_router.include_router(enrollments.router)
+
+# Справочник уровней
+api_router.include_router(levels.router)
+
+# Рейтинг игроков
+api_router.include_router(ratings.router)
