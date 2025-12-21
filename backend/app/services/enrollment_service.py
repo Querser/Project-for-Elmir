@@ -1,4 +1,4 @@
-# app/services/enrollment_service.py
+# backend/app/services/enrollment_service.py
 from __future__ import annotations
 
 from datetime import datetime
@@ -10,18 +10,17 @@ from app.core.exceptions import AppException
 from app.models.enrollment import Enrollment, EnrollmentStatus
 from app.models.training import Training
 from app.models.user import User
+from app.services.ban_service import has_active_ban
+from app.services.debt_service import has_open_debts
 
 
 # Настройки логики (пока нули — ограничения по времени не действуют,
 # при необходимости поменяешь на нужное количество часов)
-MIN_HOURS_BEFORE_ENROLL = 0     # минимальное количество часов до начала для записи
-MIN_HOURS_BEFORE_CANCEL = 0     # минимальное количество часов до начала для отмены
+MIN_HOURS_BEFORE_ENROLL = 0
+MIN_HOURS_BEFORE_CANCEL = 0
 
 
 def _ensure_training_exists(db: Session, training_id: int) -> Training:
-    """
-    Проверяем, что тренировка существует и не отменена.
-    """
     training = (
         db.query(Training)
         .filter(Training.id == training_id)
@@ -41,10 +40,6 @@ def _ensure_training_exists(db: Session, training_id: int) -> Training:
 
 
 def _check_time_before(start_at: datetime, min_hours: int, *, error_code: str, message: str) -> None:
-    """
-    Общая проверка «не поздно ли» для записи/отмены.
-    Пока min_hours = 0 — проверка фактически отключена.
-    """
     if min_hours <= 0:
         return
 
@@ -52,9 +47,6 @@ def _check_time_before(start_at: datetime, min_hours: int, *, error_code: str, m
     delta_seconds = (start_at - now).total_seconds()
     if delta_seconds < min_hours * 3600:
         raise AppException(error_code=error_code, message=message)
-
-
-# ==================== ЗАПИСЬ НА ТРЕНИРОВКУ ====================
 
 
 def enroll_user_to_training(
@@ -65,15 +57,20 @@ def enroll_user_to_training(
 ) -> Enrollment:
     """
     Записываем пользователя на тренировку:
-    - проверка, что тренировка существует и не отменена;
-    - проверка дупликата записи;
-    - расчёт: основа или резерв;
-    - учёт лимитов capacity_main / capacity_reserve.
-    (Проверки уровня, банов и т.п. можно добавить позже.)
+    - проверка тренировки (существует/не отменена)
+    - проверка ограничений: баны + долги (этап 8)
+    - проверка дубликата
+    - расчёт: основа или резерв
     """
+    # ЭТАП 8: запрет при активном бане или открытых долгах
+    if has_active_ban(db, user_id=user.id):
+        raise AppException(error_code="FORBIDDEN", message="Запись недоступна: у вас активный бан")
+
+    if has_open_debts(db, user_id=user.id):
+        raise AppException(error_code="FORBIDDEN", message="Запись недоступна: у вас есть неоплаченный долг")
+
     training = _ensure_training_exists(db, training_id)
 
-    # Проверка «не поздно ли записываться»
     _check_time_before(
         training.start_at,
         MIN_HOURS_BEFORE_ENROLL,
@@ -81,7 +78,6 @@ def enroll_user_to_training(
         message="Запись на тренировку уже недоступна",
     )
 
-    # Уже записан?
     existing = (
         db.query(Enrollment)
         .filter(
@@ -97,7 +93,6 @@ def enroll_user_to_training(
             message="Вы уже записаны на эту тренировку",
         )
 
-    # Сколько людей уже в основе и резерве (с активным статусом)
     main_count = (
         db.query(Enrollment)
         .filter(
@@ -118,7 +113,6 @@ def enroll_user_to_training(
         .count()
     )
 
-    # Решаем, куда ставим: основа / резерв
     if main_count < training.capacity_main:
         is_reserve = False
     elif reserve_count < training.capacity_reserve:
@@ -142,22 +136,12 @@ def enroll_user_to_training(
     return enrollment
 
 
-# ==================== ОТМЕНА ЗАПИСИ ====================
-
-
 def cancel_enrollment_for_user(
     db: Session,
     *,
     user: User,
     enrollment_id: int,
 ) -> Enrollment:
-    """
-    Отмена записи пользователем:
-    - проверяем, что запись существует и принадлежит этому пользователю;
-    - проверяем, что статус ACTIVE;
-    - проверка N часов до тренировки;
-    - если отменяется основа — поднимаем первого из резерва в основу.
-    """
     enrollment = (
         db.query(Enrollment)
         .filter(Enrollment.id == enrollment_id)
@@ -177,7 +161,6 @@ def cancel_enrollment_for_user(
             message="Нельзя отменить эту запись",
         )
 
-    # Проверка «не поздно ли отменять»
     _check_time_before(
         training.start_at,
         MIN_HOURS_BEFORE_CANCEL,
@@ -187,7 +170,6 @@ def cancel_enrollment_for_user(
 
     enrollment.status = EnrollmentStatus.CANCELLED
 
-    # Если отменяется основа — поднимаем первого из резерва
     if not enrollment.is_reserve:
         reserve = (
             db.query(Enrollment)
@@ -209,18 +191,10 @@ def cancel_enrollment_for_user(
     return enrollment
 
 
-# ==================== СОСТАВ ТРЕНИРОВКИ ====================
-
-
 def get_training_roster(
     db: Session,
     training_id: int,
 ) -> Tuple[List[Enrollment], List[Enrollment]]:
-    """
-    Возвращает кортеж (main, reserve):
-    - main  — список записей в основе;
-    - reserve — список записей в резерве.
-    """
     _ensure_training_exists(db, training_id)
 
     main = (

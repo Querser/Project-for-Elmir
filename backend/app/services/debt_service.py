@@ -1,65 +1,72 @@
-# app/services/debt_service.py
-from datetime import datetime, timezone
+# backend/app/services/debt_service.py
+from __future__ import annotations
 
-from sqlalchemy import select, func
-from sqlalchemy.ext.asyncio import AsyncSession
+from datetime import datetime
+from decimal import Decimal
 
-from app.core.exceptions import AppException, ErrorCode
+from sqlalchemy.orm import Session
+
+from app.core.exceptions import AppException
 from app.models.debt import Debt
+from app.models.training import Training
+from app.services.ban_service import deactivate_auto_debt_bans_if_any
 
 
-async def list_debts(
-    db: AsyncSession,
-    *,
-    user_id: int | None = None,
-    is_closed: bool | None = None,
-    limit: int = 50,
-    offset: int = 0,
-) -> tuple[list[Debt], int]:
-    """
-    Список долгов с фильтрацией по пользователю и статусу.
-    """
-    query = select(Debt)
-    if user_id is not None:
-        query = query.where(Debt.user_id == user_id)
-    if is_closed is not None:
-        query = query.where(Debt.is_closed == is_closed)
-
-    total_query = select(func.count()).select_from(query.subquery())
-    total_result = await db.execute(total_query)
-    total = int(total_result.scalar_one())
-
-    query = query.order_by(Debt.created_at.desc()).limit(limit).offset(offset)
-    res = await db.execute(query)
-    items = list(res.scalars().all())
-    return items, total
+def has_open_debts(db: Session, *, user_id: int) -> bool:
+    return (
+        db.query(Debt)
+        .filter(
+            Debt.user_id == user_id,
+            Debt.status == "OPEN",
+        )
+        .first()
+        is not None
+    )
 
 
-async def close_debt(
-    db: AsyncSession,
-    *,
-    debt_id: int,
-    auto_unban_callback=None,
-) -> Debt:
-    """
-    Закрыть долг (например, после успешной оплаты).
-    auto_unban_callback(db, user_id) — функция, которая может разбанить пользователя,
-    если у него не осталось открытых долгов.
-    """
-    res = await db.execute(select(Debt).where(Debt.id == debt_id))
-    debt = res.scalar_one_or_none()
-    if debt is None:
-        raise AppException(ErrorCode.NOT_FOUND, "Долг не найден")
+def create_open_debt_if_missing(db: Session, *, user_id: int, training: Training) -> Debt:
+    existing = (
+        db.query(Debt)
+        .filter(
+            Debt.user_id == user_id,
+            Debt.training_id == training.id,
+            Debt.status == "OPEN",
+        )
+        .first()
+    )
+    if existing:
+        return existing
 
-    if not debt.is_closed:
-        debt.is_closed = True
-        debt.closed_at = datetime.now(timezone.utc)
-        await db.flush()
-
-        if auto_unban_callback is not None:
-            await auto_unban_callback(db, debt.user_id)
-
-        await db.commit()
-        await db.refresh(debt)
-
+    debt = Debt(
+        user_id=user_id,
+        training_id=training.id,
+        amount=Decimal(str(training.price)),
+        status="OPEN",
+        closed_at=None,
+    )
+    db.add(debt)
+    db.commit()
+    db.refresh(debt)
     return debt
+
+
+def close_debt_for_training(db: Session, *, user_id: int, training_id: int) -> None:
+    debt = (
+        db.query(Debt)
+        .filter(
+            Debt.user_id == user_id,
+            Debt.training_id == training_id,
+            Debt.status == "OPEN",
+        )
+        .first()
+    )
+    if not debt:
+        raise AppException(error_code="NOT_FOUND", message="Открытый долг не найден")
+
+    debt.status = "CLOSED"
+    debt.closed_at = datetime.utcnow()
+    db.commit()
+
+    # Если открытых долгов больше нет — снимаем автобан
+    if not has_open_debts(db, user_id=user_id):
+        deactivate_auto_debt_bans_if_any(db, user_id=user_id)
