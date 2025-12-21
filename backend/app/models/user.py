@@ -1,4 +1,4 @@
-# backend/app/models/user.py
+# app/models/user.py
 from __future__ import annotations
 
 from datetime import date, datetime
@@ -117,6 +117,11 @@ class User(Base):
     )
     payments: Mapped[List["Payment"]] = relationship(
         "Payment",
+        back_populates="user",
+    )
+    # 🔹 Новая связь — долги пользователя
+    debts: Mapped[List["Debt"]] = relationship(
+        "Debt",
         back_populates="user",
     )
     bans: Mapped[List["Ban"]] = relationship(

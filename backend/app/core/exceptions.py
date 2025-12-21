@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from enum import Enum
 from typing import Any
 
 from fastapi import FastAPI, Request, status
@@ -14,22 +15,57 @@ from app.core.responses import error_response
 logger = logging.getLogger("app.errors")
 
 
+class ErrorCode(str, Enum):
+    """
+    Единый список кодов ошибок, которые используем в приложении.
+    """
+
+    # Общие
+    VALIDATION_ERROR = "VALIDATION_ERROR"
+    INTERNAL_SERVER_ERROR = "INTERNAL_SERVER_ERROR"
+    HTTP_ERROR = "HTTP_ERROR"
+
+    # Авторизация и права
+    UNAUTHORIZED = "UNAUTHORIZED"
+    FORBIDDEN = "FORBIDDEN"
+
+    # Нахождение сущностей
+    NOT_FOUND = "NOT_FOUND"
+
+    # Тренировки / записи
+    ALREADY_ENROLLED = "ALREADY_ENROLLED"
+    ENROLLMENT_FORBIDDEN = "ENROLLMENT_FORBIDDEN"
+    TRAINING_CANCELLED = "TRAINING_CANCELLED"
+
+    # Баны / долги
+    ALREADY_BANNED = "ALREADY_BANNED"
+    NO_OPEN_BANS = "NO_OPEN_BANS"
+    DEBT_NOT_FOUND = "DEBT_NOT_FOUND"
+
+
 class AppException(Exception):
     """
     Базовое прикладное исключение.
 
-    Используем его, когда хотим вернуть осмысленную ошибку клиенту.
+    Теперь можно вызывать как с enum, так и со строкой:
+
+        raise AppException(ErrorCode.NOT_FOUND, "Тренировка не найдена")
+        raise AppException("NOT_FOUND", "Тренировка не найдена")
     """
 
     def __init__(
         self,
-        *,
-        error_code: str,
+        error_code: ErrorCode | str,
         message: str,
         status_code: int = status.HTTP_400_BAD_REQUEST,
         details: dict[str, Any] | None = None,
     ) -> None:
-        self.error_code = error_code
+        # Преобразуем ErrorCode -> строка, чтобы в ответах всегда были строки
+        if isinstance(error_code, ErrorCode):
+            self.error_code = error_code.value
+        else:
+            self.error_code = str(error_code)
+
         self.message = message
         self.status_code = status_code
         self.details = details or {}

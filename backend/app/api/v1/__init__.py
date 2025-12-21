@@ -8,6 +8,7 @@ from app.api.v1 import (
     enrollments,
     levels,
     ratings,
+    admin_billing,
 )
 
 api_router = APIRouter()
@@ -15,13 +16,13 @@ api_router = APIRouter()
 # Системные/тестовые ручки
 api_router.include_router(system.router, tags=["system"])
 
-# Профиль пользователя
+# Роуты профиля пользователя
 api_router.include_router(profile.router, tags=["profile"])
 
-# Тренировки и расписание
+# Роуты тренировок и расписания
 api_router.include_router(trainings.router)
 
-# Записи на тренировки (основа/резерв)
+# Роуты записей на тренировки
 api_router.include_router(enrollments.router)
 
 # Справочник уровней
@@ -29,3 +30,6 @@ api_router.include_router(levels.router)
 
 # Рейтинг игроков
 api_router.include_router(ratings.router)
+
+# Админские ручки по долгам/банам
+api_router.include_router(admin_billing.router)
