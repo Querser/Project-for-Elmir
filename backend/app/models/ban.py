@@ -1,60 +1,45 @@
-# backend/app/models/ban.py
-from __future__ import annotations
+﻿from __future__ import annotations
 
-from datetime import datetime
 import enum
+from datetime import datetime
+from typing import Optional
 
-from sqlalchemy import Integer, String, Boolean, DateTime, ForeignKey, text
-from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy.dialects.postgresql import ENUM as PGEnum
+from sqlalchemy import Boolean, Column, DateTime, Enum as SAEnum, ForeignKey, Integer, String, func, text
+from sqlalchemy.orm import relationship
 
-from .base import Base
+from app.db.base import Base
 
 
 class BanType(str, enum.Enum):
-    # В БД enum public.bantype = ('MANUAL', 'AUTO_DEBT')
     MANUAL = "MANUAL"
     AUTO_DEBT = "AUTO_DEBT"
-
-
-BAN_TYPE_ENUM = PGEnum(
-    BanType.MANUAL.value,
-    BanType.AUTO_DEBT.value,
-    name="bantype",
-    schema="public",
-    create_type=False,
-)
 
 
 class Ban(Base):
     __tablename__ = "bans"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
 
-    user_id: Mapped[int] = mapped_column(
-        Integer,
-        ForeignKey("users.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
+    # В Postgres enum называется bantype (у тебя он уже создан миграцией)
+    type = Column(SAEnum(BanType, name="bantype"), nullable=False)
 
-    # колонка в БД называется "type"
-    type: Mapped[str] = mapped_column(BAN_TYPE_ENUM, nullable=False)
+    reason = Column(String, nullable=False)
+    active = Column(Boolean, nullable=False, server_default=text("true"))
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    until = Column(DateTime(timezone=True), nullable=True)
 
-    reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    user = relationship("User", lazy="selectin")
 
-    active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    def is_active(self, now: Optional[datetime] = None) -> bool:
+        if not self.active:
+            return False
+        if self.until is None:
+            return True
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=text("now()"),
-    )
-
-    until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-
-    # если в User есть relationship(... back_populates="user"), это нужно
-    user: Mapped["User"] = relationship("User", back_populates="bans")
-
-    def __repr__(self) -> str:
-        return f"<Ban id={self.id} user_id={self.user_id} type={self.type} active={self.active}>"
+        now = now or datetime.utcnow()
+        # На всякий случай: сравнение naive/aware
+        try:
+            return now <= self.until
+        except TypeError:
+            return now.replace(tzinfo=None) <= self.until.replace(tzinfo=None)

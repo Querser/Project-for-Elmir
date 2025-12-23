@@ -1,69 +1,34 @@
-# backend/app/models/debt.py
-from __future__ import annotations
+﻿from __future__ import annotations
 
+import enum
+from typing import Optional
 from datetime import datetime
-from decimal import Decimal
 
-from sqlalchemy import Integer, DateTime, ForeignKey, Numeric, UniqueConstraint, text
-from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy.dialects.postgresql import ENUM as PGEnum
+from sqlalchemy import Column, DateTime, Enum as SAEnum, ForeignKey, Integer, Numeric, func, text
+from sqlalchemy.orm import relationship
 
-from .base import Base
+from app.db.base import Base
 
 
-# В БД enum public.debtstatus = ('OPEN', 'CLOSED')
-DEBT_STATUS_ENUM = PGEnum(
-    "OPEN",
-    "CLOSED",
-    name="debtstatus",
-    schema="public",
-    create_type=False,
-)
+class DebtStatus(str, enum.Enum):
+    OPEN = "OPEN"
+    CLOSED = "CLOSED"
 
 
 class Debt(Base):
     __tablename__ = "debts"
-    __table_args__ = (UniqueConstraint("user_id", "training_id", name="uq_debt_user_training"),)
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    training_id = Column(Integer, ForeignKey("trainings.id", ondelete="CASCADE"), nullable=False, index=True)
 
-    user_id: Mapped[int] = mapped_column(
-        Integer,
-        ForeignKey("users.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
+    amount = Column(Numeric(12, 2), nullable=False)
 
-    training_id: Mapped[int] = mapped_column(
-        Integer,
-        ForeignKey("trainings.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
+    # В Postgres enum называется debtstatus (у тебя он уже создан миграцией)
+    status = Column(SAEnum(DebtStatus, name="debtstatus"), nullable=False, server_default=text("'OPEN'"))
 
-    amount: Mapped[Decimal] = mapped_column(
-        Numeric(10, 2),
-        nullable=False,
-        server_default=text("0"),
-    )
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    closed_at = Column(DateTime(timezone=True), nullable=True)
 
-    status: Mapped[str] = mapped_column(
-        DEBT_STATUS_ENUM,
-        nullable=False,
-        server_default=text("'OPEN'::public.debtstatus"),
-        index=True,
-    )
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=text("now()"),
-    )
-
-    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-
-    user: Mapped["User"] = relationship("User")
-    training: Mapped["Training"] = relationship("Training")
-
-    def __repr__(self) -> str:
-        return f"<Debt id={self.id} user_id={self.user_id} training_id={self.training_id} status={self.status}>"
+    user = relationship("User", lazy="selectin")
+    training = relationship("Training", lazy="selectin")

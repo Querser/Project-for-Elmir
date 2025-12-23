@@ -1,0 +1,23 @@
+﻿
+
+StatusCode        : 200
+StatusDescription : OK
+Content           : {"openapi":"3.1.0","info":{"title":"Volleyball MiniApp API","version":"0.1.0"},"paths":{"/api/v1/ping":{"get":{"tags":["system"],"summary":
+                    "ÐÑÐ¾Ð²ÐµÑÐºÐ° ÑÐ°Ð±Ð¾ÑÑ API Ð±ÐµÐ· Ð°Ð²ÑÐ¾ÑÐ¸Ð·Ð°ÑÐ...
+RawContent        : HTTP/1.1 200 OK
+                    Content-Length: 26784
+                    Content-Type: application/json
+                    Date: Mon, 22 Dec 2025 18:07:42 GMT
+                    Server: uvicorn
+                    
+                    {"openapi":"3.1.0","info":{"title":"Volleyball MiniApp API","version":"0...
+Forms             : {}
+Headers           : {[Content-Length, 26784], [Content-Type, application/json], [Date, Mon, 22 Dec 2025 18:07:42 GMT], [Server, uvicorn]}
+Images            : {}
+InputFields       : {}
+Links             : {}
+ParsedHtml        : mshtml.HTMLDocumentClass
+RawContentLength  : 26784
+
+
+
