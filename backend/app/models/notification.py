@@ -1,39 +1,35 @@
-# app/models/notification.py
-from datetime import datetime
+# backend/app/models/notification.py
+from __future__ import annotations
 
-from sqlalchemy import Integer, DateTime, String, Boolean, ForeignKey, Text
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy.orm import relationship
 
-from .base import Base
+from app.db.base import Base
 
 
 class Notification(Base):
-    """
-    Уведомление для пользователя.
-    """
     __tablename__ = "notifications"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True, index=True)
 
-    user_id: Mapped[int | None] = mapped_column(
-        Integer,
-        ForeignKey("users.id", ondelete="CASCADE"),
-        nullable=True,
-    )
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
 
-    type: Mapped[str] = mapped_column(String(50), nullable=False)
-    title: Mapped[str] = mapped_column(String(150), nullable=False)
-    body: Mapped[str] = mapped_column(Text, nullable=False)
+    type = Column(String(50), nullable=False, index=True)
 
-    is_read: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # В БД: NOT NULL
+    title = Column(String(150), nullable=False)
+    body = Column(Text, nullable=False)
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        default=datetime.utcnow,
-    )
+    # В БД у тебя тоже NOT NULL (и уже есть колонка)
+    text = Column(Text, nullable=False)
 
-    user: Mapped["User | None"] = relationship("User", back_populates="notifications")
+    entity_type = Column(String(50), nullable=True, index=True)
+    entity_id = Column(Integer, nullable=True, index=True)
 
-    def __repr__(self) -> str:
-        return f"<Notification id={self.id} type={self.type}>"
+    url = Column(String(500), nullable=True)
+
+    is_read = Column(Boolean, nullable=False, server_default="false")
+
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    user = relationship("User", back_populates="notifications")
