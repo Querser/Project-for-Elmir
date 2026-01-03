@@ -1,26 +1,22 @@
-# app/models/__init__.py
-from .base import Base
-from .level import Level
-from .user import User
-from .location import Location
-from .training import Training
-from .enrollment import Enrollment
-from .payment import Payment
-from .ban import Ban
-from .notification import Notification
-from .audit_log import AuditLog
-from .setting import Setting
+from __future__ import annotations
 
-__all__ = [
-    "Base",
-    "Level",
-    "User",
-    "Location",
-    "Training",
-    "Enrollment",
-    "Payment",
-    "Ban",
-    "Notification",
-    "AuditLog",
-    "Setting",
-]
+# Base должен быть доступен как app.models.Base (у тебя так делает alembic env.py)
+from app.models.base import Base
+
+# ВАЖНО: импортируем модули моделей ради регистрации таблиц в Base.metadata
+# (это нужно для alembic --autogenerate)
+from . import (  # noqa: F401
+    user,
+    level,
+    location,
+    training,
+    enrollment,
+    payment,
+    notification,
+    ban,
+    debt,        
+    setting,
+    audit_log,
+)
+
+__all__ = ["Base"]

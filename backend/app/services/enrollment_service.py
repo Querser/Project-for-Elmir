@@ -59,9 +59,12 @@ def enroll_user_to_training(
     Записываем пользователя на тренировку:
     - проверка тренировки (существует/не отменена)
     - проверка ограничений: баны + долги (этап 8)
-    - проверка дубликата
+    - обработка повторной записи (учёт UNIQUE (user_id, training_id)):
+        * если уже ACTIVE -> ALREADY_ENROLLED
+        * если есть CANCELLED -> реактивируем (UPDATE), а не INSERT (чиним 500)
     - расчёт: основа или резерв
     """
+
     # ЭТАП 8: запрет при активном бане или открытых долгах
     if has_active_ban(db, user_id=user.id):
         raise AppException(error_code="FORBIDDEN", message="Запись недоступна: у вас активный бан")
@@ -78,21 +81,24 @@ def enroll_user_to_training(
         message="Запись на тренировку уже недоступна",
     )
 
-    existing = (
+    # ВАЖНО: ищем ЛЮБУЮ запись (ACTIVE/CANCELLED), потому что в БД UNIQUE (user_id, training_id)
+    existing_any = (
         db.query(Enrollment)
         .filter(
             Enrollment.user_id == user.id,
             Enrollment.training_id == training.id,
-            Enrollment.status == EnrollmentStatus.ACTIVE,
         )
         .one_or_none()
     )
-    if existing:
+
+    if existing_any and existing_any.status == EnrollmentStatus.ACTIVE:
+        # как раньше
         raise AppException(
             error_code="ALREADY_ENROLLED",
             message="Вы уже записаны на эту тренировку",
         )
 
+    # Считаем заполненность (только ACTIVE!)
     main_count = (
         db.query(Enrollment)
         .filter(
@@ -123,6 +129,20 @@ def enroll_user_to_training(
             message="Свободных мест на тренировке нет",
         )
 
+    # ✅ ФИКС: если запись была CANCELLED — реактивируем её (UPDATE вместо INSERT)
+    if existing_any and existing_any.status == EnrollmentStatus.CANCELLED:
+        existing_any.status = EnrollmentStatus.ACTIVE
+        existing_any.is_reserve = is_reserve
+        existing_any.is_paid = False
+        # Чтобы очередь/резерв были честными как при новой записи
+        existing_any.created_at = datetime.utcnow()
+
+        db.add(existing_any)
+        db.commit()
+        db.refresh(existing_any)
+        return existing_any
+
+    # Если записи не было вообще — создаём новую
     enrollment = Enrollment(
         user_id=user.id,
         training_id=training.id,

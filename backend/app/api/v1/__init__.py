@@ -1,8 +1,10 @@
 from fastapi import APIRouter
 
 from app.api.v1 import (
+    admin_audit_logs,
     admin_billing,
     admin_notifications,
+    admin_settings,
     enrollments,
     levels,
     notifications,
@@ -24,6 +26,8 @@ api_router.include_router(ratings.router)
 # admin
 api_router.include_router(admin_billing.router)
 api_router.include_router(admin_notifications.router)
+api_router.include_router(admin_settings.router)
+api_router.include_router(admin_audit_logs.router)
 
 # stage9
 api_router.include_router(notifications.router)
