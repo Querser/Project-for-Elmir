@@ -15,7 +15,7 @@ router = APIRouter(prefix="/profile", tags=["profile"])
 
 
 @router.get("/me")
-async def get_profile_me(
+def get_profile_me(
     current_user: User = Depends(get_current_user),
 ) -> dict:
     """
@@ -28,7 +28,7 @@ async def get_profile_me(
 
 
 @router.patch("/me")
-async def update_profile_me(
+def update_profile_me(
     data: UserProfileUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),

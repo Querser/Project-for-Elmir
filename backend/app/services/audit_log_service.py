@@ -4,11 +4,11 @@ import json
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 
-async def write_audit_log(
-    db: AsyncSession,
+def write_audit_log(
+    db: Session,
     *,
     user_id: Optional[int],
     action: str,
@@ -21,7 +21,7 @@ async def write_audit_log(
 ) -> None:
     data_json = None if data is None else json.dumps(data, ensure_ascii=False)
 
-    await db.execute(
+    db.execute(
         text(
             """
             INSERT INTO audit_logs (user_id, action, entity, entity_id, data, ip, user_agent, created_at, updated_at)
@@ -40,11 +40,11 @@ async def write_audit_log(
     )
 
     if commit:
-        await db.commit()
+        db.commit()
 
 
-async def list_audit_logs(
-    db: AsyncSession,
+def list_audit_logs(
+    db: Session,
     *,
     limit: int,
     offset: int,
@@ -54,7 +54,14 @@ async def list_audit_logs(
     entity_id: Optional[int] = None,
 ) -> Tuple[List[dict], int]:
     where = []
-    params = {"limit": limit, "offset": offset, "user_id": user_id, "action": action, "entity": entity, "entity_id": entity_id}
+    params = {
+        "limit": limit,
+        "offset": offset,
+        "user_id": user_id,
+        "action": action,
+        "entity": entity,
+        "entity_id": entity_id,
+    }
 
     if user_id is not None:
         where.append("user_id = :user_id")
@@ -67,12 +74,12 @@ async def list_audit_logs(
 
     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
 
-    total = await db.scalar(
+    total = db.execute(
         text(f"SELECT COUNT(*) FROM audit_logs {where_sql}"),
         params,
-    )
+    ).scalar()
 
-    rows = await db.execute(
+    rows = db.execute(
         text(
             f"""
             SELECT id, user_id, action, created_at, entity, entity_id, data, ip, user_agent, updated_at
@@ -83,7 +90,7 @@ async def list_audit_logs(
             """
         ),
         params,
-    )
+    ).mappings().all()
 
-    items = [dict(r._mapping) for r in rows.fetchall()]
+    items = [dict(r) for r in rows]
     return items, int(total or 0)

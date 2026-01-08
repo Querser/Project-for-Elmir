@@ -44,3 +44,13 @@ class NotificationListOut(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class AdminCreateNotificationsForTrainingIn(BaseModel):
+    """Admin input: send a notification to all participants of a training."""
+
+    training_id: int
+    type: str = Field(default="TRAINING")
+    title: str = Field(..., min_length=1)
+    text: str = Field(..., min_length=1)
+    url: Optional[str] = None

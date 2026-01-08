@@ -1,0 +1,9 @@
+﻿{
+    "description":  "check public list",
+    "start_at":  "2026-01-08T14:32:58Z",
+    "duration_minutes":  60,
+    "capacity_reserve":  6,
+    "price":  10,
+    "capacity_main":  12,
+    "title":  "Upcoming"
+}

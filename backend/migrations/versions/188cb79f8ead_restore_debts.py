@@ -17,7 +17,6 @@ depends_on = None
 
 def _table_exists(name: str) -> bool:
     bind = op.get_bind()
-    # Postgres way: to_regclass вернёт NULL если таблицы нет
     res = bind.execute(sa.text("SELECT to_regclass(:t)"), {"t": f"public.{name}"}).scalar()
     return res is not None
 
@@ -31,13 +30,11 @@ def upgrade() -> None:
     if _table_exists("debts"):
         return
 
-    debtstatus_existing = postgresql.ENUM(
-        "OPEN", "CLOSED", name="debtstatus", create_type=False
-    )
+    debtstatus_existing = postgresql.ENUM("OPEN", "CLOSED", name="debtstatus", create_type=False)
 
     op.create_table(
         "debts",
-        sa.Column("id", sa.Integer(), nullable=False),
+        sa.Column("id", sa.Integer(), primary_key=True, nullable=False, autoincrement=True),
         sa.Column("user_id", sa.Integer(), nullable=False),
         sa.Column("training_id", sa.Integer(), nullable=False),
         sa.Column("amount", sa.Numeric(10, 2), nullable=False),
@@ -56,7 +53,6 @@ def upgrade() -> None:
         sa.Column("closed_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(["training_id"], ["trainings.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("id"),
     )
 
     op.create_index("ix_debts_id", "debts", ["id"], unique=False)

@@ -34,7 +34,7 @@ def _validate(model_cls, obj):
     return model_cls.from_orm(obj)
 
 
-async def get_current_admin(
+def get_current_admin(
     current_user: User | None = Depends(get_current_user),
 ) -> User:
     if current_user is None:
@@ -54,7 +54,7 @@ async def get_current_admin(
 
 
 @router.get("/debts")
-async def list_debts_admin(
+def list_debts_admin(
     user_id: int | None = Query(default=None),
     training_id: int | None = Query(default=None),
     is_closed: bool | None = Query(default=None),
@@ -89,7 +89,7 @@ async def list_debts_admin(
 
 
 @router.post("/debts/{debt_id}/close")
-async def close_debt_admin(
+def close_debt_admin(
     debt_id: int,
     db: Session = Depends(get_db),
     _: User = Depends(get_current_admin),
@@ -115,7 +115,7 @@ async def close_debt_admin(
 
 
 @router.get("/bans")
-async def list_bans_admin(
+def list_bans_admin(
     user_id: int | None = Query(default=None),
     is_active: bool | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=500),
@@ -135,7 +135,7 @@ async def list_bans_admin(
 
 
 @router.post("/bans/{user_id}/ban")
-async def manual_ban_admin(
+def manual_ban_admin(
     user_id: int,
     body: BanCreateRequest,
     db: Session = Depends(get_db),
@@ -147,7 +147,7 @@ async def manual_ban_admin(
 
 
 @router.post("/bans/{user_id}/unban")
-async def manual_unban_admin(
+def manual_unban_admin(
     user_id: int,
     db: Session = Depends(get_db),
     _: User = Depends(get_current_admin),

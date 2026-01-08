@@ -1,56 +1,62 @@
-# backend/app/jobs/autoban_job.py
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
+from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models.enrollment import Enrollment, EnrollmentStatus
+from app.policies import AUTO_BAN_DELTA
+from app.models.debt import Debt
 from app.models.training import Training
-from app.services.debt_service import create_open_debt_if_missing
-from app.services.ban_service import ensure_auto_debt_ban
 
 
-# По ТЗ “N часов до начала”. Глобальные настройки будут в этапе 11,
-# пока держим константой (можешь поставить 1 или 2).
-AUTO_BAN_HOURS_BEFORE_TRAINING = 2
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
-def run_autoban_job(db: Session) -> int:
-    now = datetime.utcnow()
-    border = now + timedelta(hours=AUTO_BAN_HOURS_BEFORE_TRAINING)
-
-    rows = (
-        db.query(Enrollment, Training)
-        .join(Training, Training.id == Enrollment.training_id)
-        .filter(
-            Enrollment.status == EnrollmentStatus.ACTIVE,
-            Enrollment.is_paid.is_(False),
-            Training.is_cancelled.is_(False),
-            Training.start_at > now,
-            Training.start_at <= border,
-        )
-        .all()
-    )
-
-    processed = 0
-    for enrollment, training in rows:
-        debt = create_open_debt_if_missing(db, user_id=enrollment.user_id, training=training)
-
-        reason = f"Неоплата тренировки #{training.id} (долг #{debt.id}, сумма {float(training.price):.2f})"
-        ensure_auto_debt_ban(db, user_id=enrollment.user_id, reason=reason)
-
-        processed += 1
-
-    return processed
+def _debt_is_open(d: Any) -> bool:
+    st = getattr(d, "status", None)
+    if st is None:
+        return True
+    s = str(st).lower()
+    return s in {"open", "unpaid", "created", "pending"}
 
 
-if __name__ == "__main__":
-    from app.db.session import SessionLocal
+def run_autoban_job(db: Session) -> dict[str, int]:
+    """
+    Идея: если у пользователя есть открытый долг по трене,
+    и тренировка стартует <= AUTO_BAN_DELTA, ставим бан.
+    """
+    now = _now()
+    horizon = now + AUTO_BAN_DELTA
 
-    db = SessionLocal()
-    try:
-        count = run_autoban_job(db)
-        print(f"autoban_job: processed={count}")
-    finally:
-        db.close()
+    debts = db.query(Debt).all()
+    affected = 0
+
+    for d in debts:
+        if not _debt_is_open(d):
+            continue
+
+        user_id = getattr(d, "user_id", None)
+        training_id = getattr(d, "training_id", None)
+        if not isinstance(user_id, int) or not isinstance(training_id, int):
+            continue
+
+        t = db.query(Training).filter(Training.id == training_id).first()
+        if not t:
+            continue
+
+        start_at = getattr(t, "start_at", None)
+        if not isinstance(start_at, datetime):
+            continue
+
+        if now <= start_at <= horizon:
+            try:
+                from app.services.ban_service import ensure_auto_debt_ban  # type: ignore
+                ensure_auto_debt_ban(db, user_id=user_id, training_id=training_id)
+                affected += 1
+            except Exception:
+                # если ban_service не импортируется — просто пропускаем
+                pass
+
+    return {"checked": len(debts), "banned": affected}

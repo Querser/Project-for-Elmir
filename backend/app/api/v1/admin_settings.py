@@ -1,85 +1,68 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
+from typing import Any
 
-from app.core.deps import get_db, require_admin
+from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
+
+from app.core.deps import get_db
+
+# В разных ветках проекта могло называться по-разному
+try:
+    from app.core.deps import require_admin
+except ImportError:  # fallback
+    from app.core.deps import get_current_admin_user as require_admin  # type: ignore
+
+# ВАЖНО: эти схемы должны реально существовать в app/schemas/setting.py
+# (у тебя раньше именно так и было, а SettingCreateRequest — нет)
 from app.schemas.setting import SettingListResponse, SettingResponse, SettingUpsertRequest
-from app.services.audit_log_service import write_audit_log
-from app.services.setting_service import delete_setting, get_setting, list_settings, upsert_setting
+from app.services.setting_service import delete_setting, list_settings, upsert_setting
 
 router = APIRouter(prefix="/admin/settings", tags=["admin-settings"])
 
 
+def _to_schema(cls, obj):
+    if hasattr(cls, "model_validate"):
+        return cls.model_validate(obj, from_attributes=True)
+    if hasattr(cls, "from_orm"):
+        return cls.from_orm(obj)
+    return cls(**obj)
+
+
+def _dump(model):
+    return model.model_dump() if hasattr(model, "model_dump") else model.dict()
+
+
 @router.get("", response_model=dict)
-async def admin_settings_list(
+def admin_settings_list(
     limit: int = 50,
     offset: int = 0,
-    db: AsyncSession = Depends(get_db),
-    _admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+    _admin: Any = Depends(require_admin),
 ):
-    items, total = await list_settings(db, limit=limit, offset=offset)
-    return {
-        "ok": True,
-        "result": SettingListResponse(
-            items=[SettingResponse.model_validate(x) for x in items],
-            total=total,
-            limit=limit,
-            offset=offset,
-        ).model_dump(),
-        "error": None,
-    }
+    items, total = list_settings(db, limit=limit, offset=offset)
+    dto_items = [_to_schema(SettingResponse, x) for x in items]
+    result = SettingListResponse(items=dto_items, total=total, limit=limit, offset=offset)
+    return {"ok": True, "result": _dump(result), "error": None}
 
 
-@router.get("/{key}", response_model=dict)
-async def admin_settings_get(
+@router.put("/{key}", response_model=dict)
+def admin_settings_upsert(
     key: str,
-    db: AsyncSession = Depends(get_db),
-    _admin=Depends(require_admin),
-):
-    s = await get_setting(db, key=key)
-    if s is None:
-        raise HTTPException(status_code=404, detail="Setting not found")
-    return {"ok": True, "result": SettingResponse.model_validate(s).model_dump(), "error": None}
-
-
-@router.post("", response_model=dict)
-async def admin_settings_upsert(
     payload: SettingUpsertRequest,
-    db: AsyncSession = Depends(get_db),
-    admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+    _admin: Any = Depends(require_admin),
 ):
-    s = await upsert_setting(db, key=payload.key, value=payload.value, description=payload.description)
-
-    await write_audit_log(
-        db,
-        user_id=getattr(admin, "id", None),
-        action="ADMIN_SETTING_UPSERT",
-        entity="setting",
-        entity_id=None,
-        data={"key": payload.key, "value": payload.value, "description": payload.description},
-        commit=True,
-    )
-
-    return {"ok": True, "result": SettingResponse.model_validate(s).model_dump(), "error": None}
+    obj = upsert_setting(db, key=key, value=payload.value, description=getattr(payload, "description", None))
+    dto = _to_schema(SettingResponse, obj)
+    return {"ok": True, "result": _dump(dto), "error": None}
 
 
 @router.delete("/{key}", response_model=dict)
-async def admin_settings_delete(
+def admin_settings_delete(
     key: str,
-    db: AsyncSession = Depends(get_db),
-    admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+    _admin: Any = Depends(require_admin),
 ):
-    ok = await delete_setting(db, key=key)
-
-    await write_audit_log(
-        db,
-        user_id=getattr(admin, "id", None),
-        action="ADMIN_SETTING_DELETE",
-        entity="setting",
-        entity_id=None,
-        data={"key": key, "deleted": ok},
-        commit=True,
-    )
-
-    return {"ok": True, "result": ok, "error": None}
+    deleted = delete_setting(db, key=key)
+    return {"ok": True, "result": {"deleted": deleted}, "error": None}

@@ -1,33 +1,43 @@
 # app/core/logger.py
-
 from __future__ import annotations
 
 import logging
+import os
 import sys
 
-from app.core.config import get_settings
+try:
+    # обычно settings тут
+    from app.core.config import settings  # type: ignore
+except Exception:
+    settings = None  # type: ignore
+
+
+def _detect_environment() -> str:
+    """
+    Возвращаем environment максимально безопасно:
+    - сначала пробуем settings.environment
+    - потом ENVIRONMENT из окружения
+    - иначе development
+    """
+    if settings is not None:
+        env = getattr(settings, "environment", None)
+        if env:
+            return str(env)
+
+    return os.getenv("ENVIRONMENT", "development")
 
 
 def configure_logging() -> None:
-    """
-    Простая настройка логирования для проекта.
-    """
-    settings = get_settings()
-    level = logging.DEBUG if settings.environment == "development" else logging.INFO
+    env = _detect_environment().strip().lower()
 
-    root_logger = logging.getLogger("app")
-    root_logger.setLevel(level)
+    level = logging.DEBUG if env in {"dev", "development", "local"} else logging.INFO
 
-    # Если уже настроен (hot-reload и т.п.) — не плодим хендлеры
-    if root_logger.handlers:
-        return
-
-    handler = logging.StreamHandler(sys.stdout)
-    formatter = logging.Formatter(
-        "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+    logging.basicConfig(
+        level=level,
+        stream=sys.stdout,
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     )
-    handler.setFormatter(formatter)
-    root_logger.addHandler(handler)
 
-    # уменьшим шум от SQLAlchemy
-    logging.getLogger("sqlalchemy.engine").setLevel(logging.INFO)
+    # чуть нормализуем шумные логгеры
+    logging.getLogger("uvicorn.error").setLevel(level)
+    logging.getLogger("uvicorn.access").setLevel(level)

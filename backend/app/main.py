@@ -49,8 +49,6 @@ app.include_router(api_v1_router, prefix="/api/v1")
 
 
 @app.get("/health", tags=["system"])
-async def healthcheck():
-    """
-    Простейший health-check, который не завязан на БД и авторизацию.
-    """
+def healthcheck():
     return {"status": "ok"}
+

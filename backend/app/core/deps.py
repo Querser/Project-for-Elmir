@@ -1,86 +1,170 @@
 # backend/app/core/deps.py
 from __future__ import annotations
 
-import os
-from typing import AsyncGenerator, Optional
+from typing import Any, Generator, Optional, Type
 
-from fastapi import Depends, Header, HTTPException, status
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import Depends, HTTPException, Request, status
+from sqlalchemy.orm import Session
 
-from app.core.config import settings
-from app.core.security import TelegramInitDataError, verify_telegram_init_data
-from app.db.session import async_session_maker
-from app.models.user import User
+# ----------------------------
+# DB dependency
+# ----------------------------
+SessionLocal = None
+
+try:
+    # Частый вариант: backend/app/db/session.py
+    from app.db.session import SessionLocal as _SessionLocal  # type: ignore
+    SessionLocal = _SessionLocal
+except Exception:
+    pass
+
+if SessionLocal is None:
+    try:
+        # Другой вариант: backend/app/database.py
+        from app.database import SessionLocal as _SessionLocal  # type: ignore
+        SessionLocal = _SessionLocal
+    except Exception:
+        pass
 
 
-def _get_bot_token() -> str:
+def get_db() -> Generator[Session, None, None]:
+    if SessionLocal is None:
+        raise RuntimeError(
+            "SessionLocal не найден. Проверь, где у тебя создаётся DB-сессия, "
+            "и поправь импорты в backend/app/core/deps.py (секция DB dependency)."
+        )
+
+    db: Session = SessionLocal()
+    try:
+        yield db
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+
+
+# ----------------------------
+# User model import helper
+# ----------------------------
+_USER_MODEL: Optional[Type[Any]] = None
+
+
+def _get_user_model() -> Type[Any]:
     """
-    Берём токен максимально безопасно и совместимо со старыми конфигами:
-    1) пробуем несколько возможных имён в settings
-    2) пробуем TELEGRAM_BOT_TOKEN из env (у тебя он точно есть внутри контейнера)
+    Пытаемся найти User-модель в типичных местах.
     """
-    for attr in ("TELEGRAM_BOT_TOKEN", "BOT_TOKEN", "TELEGRAM_TOKEN", "TG_BOT_TOKEN"):
-        if hasattr(settings, attr):
-            val = getattr(settings, attr)
-            if isinstance(val, str) and val.strip():
-                return val.strip()
+    global _USER_MODEL
+    if _USER_MODEL is not None:
+        return _USER_MODEL
 
-    env_val = os.getenv("TELEGRAM_BOT_TOKEN")
-    if env_val and env_val.strip():
-        return env_val.strip()
-
-    raise RuntimeError(
-        "Bot token not found. Expected settings.TELEGRAM_BOT_TOKEN (or BOT_TOKEN/TELEGRAM_TOKEN/TG_BOT_TOKEN) "
-        "or env TELEGRAM_BOT_TOKEN"
+    candidates = (
+        "app.models.user",
+        "app.models.users",
+        "app.models",
     )
 
+    last_err: Exception | None = None
+    for mod in candidates:
+        try:
+            m = __import__(mod, fromlist=["User"])
+            User = getattr(m, "User", None)
+            if User is not None:
+                _USER_MODEL = User
+                return _USER_MODEL
+        except Exception as e:
+            last_err = e
 
-async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    async with async_session_maker() as session:
-        yield session
+    raise RuntimeError(f"Не смог импортировать модель User. Последняя ошибка: {last_err}")
 
 
-async def get_current_user(
-    db: AsyncSession = Depends(get_db),
-    x_telegram_init_data: Optional[str] = Header(default=None, alias="X-Telegram-Init-Data"),
-) -> User:
-    if not x_telegram_init_data:
+# ----------------------------
+# Auth dependencies (DEV)
+# ----------------------------
+def _parse_int(v: str | None) -> int | None:
+    if v is None:
+        return None
+    v = v.strip()
+    if not v:
+        return None
+    try:
+        return int(v)
+    except Exception:
+        return None
+
+
+def _get_user_from_headers(request: Request) -> tuple[int | None, int | None]:
+    """
+    Поддерживаем 2 варианта:
+    - X-User-Id: 123
+    - X-Telegram-Id: 123456789
+    """
+    user_id = _parse_int(request.headers.get("X-User-Id"))
+    tg_id = _parse_int(request.headers.get("X-Telegram-Id"))
+    return user_id, tg_id
+
+
+def get_current_user_optional(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Any | None:
+    """
+    Мягкая авторизация: если заголовков нет/юзер не найден — возвращаем None.
+    """
+    user_id, tg_id = _get_user_from_headers(request)
+    if user_id is None and tg_id is None:
+        return None
+
+    User = _get_user_model()
+
+    q = db.query(User)
+    if user_id is not None:
+        user = q.filter(User.id == user_id).first()
+        return user
+
+    if tg_id is not None:
+        user = q.filter(User.telegram_id == tg_id).first()
+        return user
+
+    return None
+
+
+def get_current_user(
+    user: Any | None = Depends(get_current_user_optional),
+) -> Any:
+    """
+    Жёсткая авторизация: если юзера нет — 401.
+    """
+    if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing X-Telegram-Init-Data header",
+            detail="Unauthorized: provide X-User-Id or X-Telegram-Id header",
+            headers={"WWW-Authenticate": "Bearer"},
         )
-
-    bot_token = _get_bot_token()
-
-    try:
-        payload = verify_telegram_init_data(x_telegram_init_data, bot_token)
-    except TelegramInitDataError as e:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e)) from e
-
-    user_data = payload.get("user") or {}
-    tg_id = user_data.get("id")
-    if not tg_id:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Telegram user id is missing")
-
-    result = await db.execute(select(User).where(User.telegram_id == tg_id))
-    user = result.scalar_one_or_none()
-
-    if user is None:
-        user = User(
-            telegram_id=tg_id,
-            username=user_data.get("username"),
-            first_name=user_data.get("first_name"),
-            last_name=user_data.get("last_name"),
-        )
-        db.add(user)
-        await db.commit()
-        await db.refresh(user)
-
     return user
 
 
-async def require_admin(current_user: User = Depends(get_current_user)) -> User:
-    if not getattr(current_user, "is_admin", False):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin only")
-    return current_user
+def _user_is_admin(user: Any) -> bool:
+    if user is None:
+        return False
+
+    # ORM-модель
+    if hasattr(user, "is_admin"):
+        return bool(getattr(user, "is_admin"))
+
+    # На всякий случай dict
+    if isinstance(user, dict):
+        return bool(user.get("is_admin"))
+
+    return False
+
+
+def get_current_admin_user(
+    user: Any = Depends(get_current_user),
+) -> Any:
+    if not _user_is_admin(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required",
+        )
+    return user

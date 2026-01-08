@@ -1,120 +1,57 @@
-# app/api/v1/ratings.py
 from __future__ import annotations
 
+from typing import Optional
+
 from fastapi import APIRouter, Depends, Query
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.core.middleware import get_current_user
-from app.core.responses import success_response
-from app.db.session import get_db
-from app.core.exceptions import AppException
+from app.core.deps import get_db
+from app.models.rating import Rating
 from app.models.user import User
-from app.schemas.rating import (
-    RatingUserDTO,
-    RatingLeaderboardResponse,
-    RatingUserInfoDTO,
-)
-from app.services.rating_service import (
-    get_leaderboard as get_leaderboard_service,
-    get_user_position,
-    get_total_active_users,
-)
+from app.models.level import Level
 
 router = APIRouter(prefix="/ratings", tags=["ratings"])
 
 
-@router.get("/leaderboard")
-async def get_leaderboard(
+@router.get("")
+def get_ratings(
+    level_id: Optional[int] = Query(default=None),
     db: Session = Depends(get_db),
-    limit: int = Query(100, ge=1, le=500),
-    offset: int = Query(0, ge=0),
-) -> dict:
-    """
-    Таблица лидеров.
-
-    GET /api/v1/ratings/leaderboard?limit=...&offset=...
-
-    Возвращает пользователей, отсортированных по rating, cups.
-    """
-    users, total = get_leaderboard_service(db, limit=limit, offset=offset)
-
-    items: list[RatingUserDTO] = []
-    for idx, user in enumerate(users):
-        dto = RatingUserDTO(
-            position=offset + idx + 1,
-            user_id=user.id,
-            telegram_id=user.telegram_id,
-            username=user.username,
-            first_name=user.first_name,
-            last_name=user.last_name,
-            rating=user.rating,
-            cups=user.cups,
-            level_id=user.level_id,
+):
+    q = (
+        db.query(
+            User.id.label("user_id"),
+            User.name.label("user_name"),
+            Level.id.label("level_id"),
+            Level.title.label("level_title"),
+            func.avg(Rating.score).label("avg_score"),
+            func.count(Rating.id).label("votes"),
         )
-        items.append(dto)
+        .join(Rating, Rating.user_id == User.id)
+        .outerjoin(Level, Level.id == Rating.level_id)
+        .group_by(User.id, User.name, Level.id, Level.title)
+        .order_by(func.avg(Rating.score).desc())
+    )
 
-    response = RatingLeaderboardResponse(
-        items=items,
-        total=total,
-        limit=limit,
-        offset=offset,
-    ).model_dump()
+    if level_id is not None:
+        q = q.filter(Rating.level_id == level_id)
 
-    return success_response(response)
-
-
-@router.get("/me")
-async def get_my_rating(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-) -> dict:
-    """
-    Информация о рейтинге ТЕКУЩЕГО пользователя.
-
-    GET /api/v1/ratings/me
-    """
-    position = get_user_position(db, current_user)
-    total = get_total_active_users(db)
-
-    dto = RatingUserInfoDTO(
-        user_id=current_user.id,
-        position=position,
-        total=total,
-        rating=current_user.rating,
-        cups=current_user.cups,
-        level_id=current_user.level_id,
-    ).model_dump()
-
-    return success_response(dto)
+    rows = q.all()
+    return [
+        {
+            "user_id": r.user_id,
+            "user_name": r.user_name,
+            "level_id": r.level_id,
+            "level_title": r.level_title,
+            "avg_score": float(r.avg_score) if r.avg_score is not None else 0.0,
+            "votes": int(r.votes or 0),
+        }
+        for r in rows
+    ]
 
 
-@router.get("/user/{user_id}")
-async def get_user_rating(
-    user_id: int,
-    db: Session = Depends(get_db),
-) -> dict:
-    """
-    Информация о рейтинге произвольного игрока по ID.
-
-    GET /api/v1/ratings/user/{user_id}
-    """
-    user = db.query(User).filter(User.id == user_id).one_or_none()
-    if user is None:
-        raise AppException(
-            error_code="NOT_FOUND",
-            message="Пользователь не найден",
-        )
-
-    position = get_user_position(db, user)
-    total = get_total_active_users(db)
-
-    dto = RatingUserInfoDTO(
-        user_id=user.id,
-        position=position,
-        total=total,
-        rating=user.rating,
-        cups=user.cups,
-        level_id=user.level_id,
-    ).model_dump()
-
-    return success_response(dto)
+@router.get("/levels")
+def rating_levels(db: Session = Depends(get_db)):
+    levels = db.query(Level).order_by(Level.id.asc()).all()
+    return [{"id": l.id, "title": l.title} for l in levels]

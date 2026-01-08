@@ -1,4 +1,3 @@
-# backend/app/services/training_service.py
 from __future__ import annotations
 
 from datetime import datetime
@@ -36,6 +35,7 @@ def create_training(db: Session, data: TrainingCreate) -> Training:
         image_url=data.image_url,
         video_url=data.video_url,
         location_id=data.location_id,
+        is_cancelled=False,  # ВАЖНО: не завязаны на DEFAULT в БД
     )
     db.add(training)
     db.commit()
@@ -44,14 +44,10 @@ def create_training(db: Session, data: TrainingCreate) -> Training:
 
 
 def update_training(db: Session, training: Training, data: TrainingUpdate) -> Training:
-    """
-    Частичное обновление тренировки: только те поля, которые реально пришли в запросе.
-    """
     update_data = data.model_dump(exclude_unset=True)
 
     for field, value in update_data.items():
         if not hasattr(training, field):
-            # на всякий случай (extra="forbid" в схеме уже отсечёт лишнее)
             continue
         setattr(training, field, value)
 
@@ -85,10 +81,6 @@ def list_trainings(
     limit: int = 20,
     offset: int = 0,
 ) -> Tuple[List[Training], int]:
-    """
-    Список тренировок с фильтрами и пагинацией.
-    Возвращает (items, total).
-    """
     query = db.query(Training)
 
     if date_from is not None:
@@ -100,7 +92,6 @@ def list_trainings(
         query = query.filter(Training.location_id == location_id)
 
     if coach_name:
-        # регистронезависимый поиск по имени тренера
         query = query.filter(Training.coach_name.ilike(f"%{coach_name}%"))
 
     if min_level_name:
@@ -113,8 +104,15 @@ def list_trainings(
 
     total = query.count()
 
+    order_expr = Training.start_at.asc()
+    try:
+        # чтобы NULL-ы не лезли наверх (если вдруг такие есть)
+        order_expr = order_expr.nullslast()
+    except Exception:
+        pass
+
     items = (
-        query.order_by(Training.start_at.asc())
+        query.order_by(order_expr)
         .offset(offset)
         .limit(limit)
         .all()

@@ -11,8 +11,8 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
 from sqlalchemy import inspect, text
+from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = "35006da0fcc7"
@@ -40,23 +40,32 @@ def upgrade() -> None:
     insp = inspect(bind)
 
     # ---------------------------------------------------------------------
-    # 0) (ОСТОРОЖНО) debts — в оригинале autogenerate почему-то удалял debts.
-    #    Чтобы НЕ ЛОМАТЬ текущую цепочку миграций (у тебя есть restore_debts),
-    #    оставляем поведение "удалить debts", но делаем это безопасно:
-    #    только если таблица реально существует.
+    # 0) debts: в исходной цепочке миграций дальше есть "restore debts".
+    #    Чтобы restore не упал на "table exists", удаляем debts здесь (если есть).
     # ---------------------------------------------------------------------
     if _table_exists(insp, "debts"):
-        # индексы дропаем через IF EXISTS, чтобы не зависеть от naming convention
-        op.execute("DROP INDEX IF EXISTS ix_debts_status;")
-        op.execute("DROP INDEX IF EXISTS ix_debts_training_id;")
-        op.execute("DROP INDEX IF EXISTS ix_debts_user_id;")
-        op.execute("DROP INDEX IF EXISTS ix_debts_id;")
         op.execute("DROP TABLE IF EXISTS debts CASCADE;")
 
     # ---------------------------------------------------------------------
-    # 1) audit_logs — добавляем новые поля/индексы максимально безопасно
+    # 1) audit_logs: создаём таблицу если её нет, иначе аккуратно доапгрейдим
     # ---------------------------------------------------------------------
-    if _table_exists(insp, "audit_logs"):
+    insp = inspect(bind)
+    if not _table_exists(insp, "audit_logs"):
+        op.create_table(
+            "audit_logs",
+            sa.Column("id", sa.Integer(), primary_key=True),
+            sa.Column("user_id", sa.Integer(), nullable=True),
+            sa.Column("action", sa.String(length=50), nullable=True),
+            sa.Column("entity", sa.String(length=50), nullable=True),
+            sa.Column("entity_id", sa.Integer(), nullable=True),
+            sa.Column("data", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+            sa.Column("ip", sa.String(length=50), nullable=True),
+            sa.Column("user_agent", sa.String(length=255), nullable=True),
+            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        )
+    else:
+        # add missing columns
         if not _col_exists(insp, "audit_logs", "entity"):
             op.add_column("audit_logs", sa.Column("entity", sa.String(length=50), nullable=True))
         if not _col_exists(insp, "audit_logs", "entity_id"):
@@ -73,18 +82,7 @@ def upgrade() -> None:
                 sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
             )
 
-        # индексы (создаём только если нет)
-        insp = inspect(bind)
-        if not _index_exists(insp, "audit_logs", "ix_audit_logs_action"):
-            op.create_index("ix_audit_logs_action", "audit_logs", ["action"], unique=False)
-        if not _index_exists(insp, "audit_logs", "ix_audit_logs_entity"):
-            op.create_index("ix_audit_logs_entity", "audit_logs", ["entity"], unique=False)
-        if not _index_exists(insp, "audit_logs", "ix_audit_logs_entity_id"):
-            op.create_index("ix_audit_logs_entity_id", "audit_logs", ["entity_id"], unique=False)
-        if not _index_exists(insp, "audit_logs", "ix_audit_logs_user_id"):
-            op.create_index("ix_audit_logs_user_id", "audit_logs", ["user_id"], unique=False)
-
-        # старые колонки удаляем только если они реально есть
+        # drop legacy columns if exist
         insp = inspect(bind)
         if _col_exists(insp, "audit_logs", "object_type"):
             op.drop_column("audit_logs", "object_type")
@@ -93,105 +91,123 @@ def upgrade() -> None:
         if _col_exists(insp, "audit_logs", "object_id"):
             op.drop_column("audit_logs", "object_id")
 
+    # indexes for audit_logs
+    insp = inspect(bind)
+    if _table_exists(insp, "audit_logs"):
+        if not _index_exists(insp, "audit_logs", "ix_audit_logs_action") and _col_exists(insp, "audit_logs", "action"):
+            op.create_index("ix_audit_logs_action", "audit_logs", ["action"], unique=False)
+        if not _index_exists(insp, "audit_logs", "ix_audit_logs_entity") and _col_exists(insp, "audit_logs", "entity"):
+            op.create_index("ix_audit_logs_entity", "audit_logs", ["entity"], unique=False)
+        if not _index_exists(insp, "audit_logs", "ix_audit_logs_entity_id") and _col_exists(insp, "audit_logs", "entity_id"):
+            op.create_index("ix_audit_logs_entity_id", "audit_logs", ["entity_id"], unique=False)
+        if not _index_exists(insp, "audit_logs", "ix_audit_logs_user_id") and _col_exists(insp, "audit_logs", "user_id"):
+            op.create_index("ix_audit_logs_user_id", "audit_logs", ["user_id"], unique=False)
+
     # ---------------------------------------------------------------------
-    # 2) bans.reason -> NOT NULL (только если безопасно)
+    # 2) bans.reason -> NOT NULL + индекс по user_id
     # ---------------------------------------------------------------------
+    insp = inspect(bind)
     if _table_exists(insp, "bans") and _col_exists(insp, "bans", "reason"):
-        # если есть NULL — сначала заполняем, чтобы ALTER не упал
         nulls = bind.execute(text("SELECT COUNT(*) FROM bans WHERE reason IS NULL")).scalar() or 0
         if nulls > 0:
             bind.execute(text("UPDATE bans SET reason = '' WHERE reason IS NULL"))
 
-        # теперь можно делать NOT NULL
         op.alter_column("bans", "reason", existing_type=sa.VARCHAR(length=255), nullable=False)
 
         insp = inspect(bind)
-        if not _index_exists(insp, "bans", "ix_bans_user_id"):
+        if _col_exists(insp, "bans", "user_id") and not _index_exists(insp, "bans", "ix_bans_user_id"):
             op.create_index("ix_bans_user_id", "bans", ["user_id"], unique=False)
 
     # ---------------------------------------------------------------------
-    # 3) notifications — индексы добавим, но НЕ удаляем старые (не ломаем)
-    #    user_id NOT NULL делаем только если NULL'ов нет
+    # 3) notifications: ГЛАВНЫЙ ФИКС — entity_id/ entity_type могут отсутствовать
     # ---------------------------------------------------------------------
+    insp = inspect(bind)
     if _table_exists(insp, "notifications"):
+        # гарантируем, что колонки существуют (иначе create_index падает)
+        if not _col_exists(insp, "notifications", "entity_id"):
+            op.add_column("notifications", sa.Column("entity_id", sa.Integer(), nullable=True))
+        insp = inspect(bind)
+        if not _col_exists(insp, "notifications", "entity_type"):
+            op.add_column("notifications", sa.Column("entity_type", sa.String(length=50), nullable=True))
+
+        # user_id NOT NULL — только если NULL'ов нет
+        insp = inspect(bind)
         if _col_exists(insp, "notifications", "user_id"):
             nulls = bind.execute(text("SELECT COUNT(*) FROM notifications WHERE user_id IS NULL")).scalar() or 0
             if nulls == 0:
                 op.alter_column("notifications", "user_id", existing_type=sa.INTEGER(), nullable=False)
 
+        # индексы — только если есть соответствующая колонка
         insp = inspect(bind)
-        if not _index_exists(insp, "notifications", "ix_notifications_entity_id"):
+        if _col_exists(insp, "notifications", "entity_id") and not _index_exists(insp, "notifications", "ix_notifications_entity_id"):
             op.create_index("ix_notifications_entity_id", "notifications", ["entity_id"], unique=False)
-        if not _index_exists(insp, "notifications", "ix_notifications_entity_type"):
+        if _col_exists(insp, "notifications", "entity_type") and not _index_exists(insp, "notifications", "ix_notifications_entity_type"):
             op.create_index("ix_notifications_entity_type", "notifications", ["entity_type"], unique=False)
-        if not _index_exists(insp, "notifications", "ix_notifications_type"):
+        if _col_exists(insp, "notifications", "type") and not _index_exists(insp, "notifications", "ix_notifications_type"):
             op.create_index("ix_notifications_type", "notifications", ["type"], unique=False)
 
     # ---------------------------------------------------------------------
-    # 4) settings — ГЛАВНЫЙ ФИКС ЭТАПА 11:
-    #    id NOT NULL + DEFAULT nextval + sequence + setval
+    # 4) settings: создаём если нет; иначе доводим до нужной схемы
     # ---------------------------------------------------------------------
-    if _table_exists(insp, "settings"):
-        # ключ/описание — безопасные изменения типов
-        if _col_exists(insp, "settings", "key"):
-            # если было VARCHAR(100) -> делаем 150
-            op.alter_column(
-                "settings",
-                "key",
-                existing_type=sa.VARCHAR(length=100),
-                type_=sa.String(length=150),
-                existing_nullable=False,
-            )
+    insp = inspect(bind)
+    op.execute("CREATE SEQUENCE IF NOT EXISTS settings_id_seq;")
 
+    if not _table_exists(insp, "settings"):
+        op.create_table(
+            "settings",
+            sa.Column("id", sa.Integer(), server_default=sa.text("nextval('settings_id_seq')"), primary_key=True),
+            sa.Column("key", sa.String(length=150), nullable=False),
+            sa.Column("value", sa.Text(), nullable=True),
+            sa.Column("description", sa.Text(), nullable=True),
+            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+            sa.UniqueConstraint("key", name="uq_settings_key"),
+        )
+    else:
+        # key length -> 150 (если есть)
+        insp = inspect(bind)
+        if _col_exists(insp, "settings", "key"):
+            # через raw sql, чтобы не зависеть от existing_type
+            op.execute("ALTER TABLE settings ALTER COLUMN key TYPE VARCHAR(150);")
+
+        # description -> TEXT (если есть)
+        insp = inspect(bind)
         if _col_exists(insp, "settings", "description"):
-            op.alter_column(
-                "settings",
-                "description",
-                existing_type=sa.VARCHAR(length=255),
-                type_=sa.Text(),
-                existing_nullable=True,
-            )
+            op.execute("ALTER TABLE settings ALTER COLUMN description TYPE TEXT;")
 
         # created_at / updated_at
         insp = inspect(bind)
         if not _col_exists(insp, "settings", "created_at"):
-            op.add_column(
-                "settings",
-                sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-            )
+            op.add_column("settings", sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False))
         if not _col_exists(insp, "settings", "updated_at"):
-            op.add_column(
-                "settings",
-                sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-            )
+            op.add_column("settings", sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False))
 
-        # sequence + id + default
-        op.execute("CREATE SEQUENCE IF NOT EXISTS settings_id_seq;")
-
+        # id column (если нет — добавим сразу NOT NULL с DEFAULT)
         insp = inspect(bind)
         if not _col_exists(insp, "settings", "id"):
-            # Добавляем id сразу с DEFAULT, чтобы не было твоей ошибки "null in id"
             op.add_column(
                 "settings",
                 sa.Column("id", sa.Integer(), server_default=sa.text("nextval('settings_id_seq')"), nullable=False),
             )
-            # После добавления — можно оставить DEFAULT, это нужно для будущих INSERT'ов.
         else:
-            # если id уже есть — ставим DEFAULT и заполняем NULL'ы
             op.execute("ALTER TABLE settings ALTER COLUMN id SET DEFAULT nextval('settings_id_seq');")
             op.execute("UPDATE settings SET id = nextval('settings_id_seq') WHERE id IS NULL;")
 
-        # выравниваем sequence на max(id)+1
-        op.execute(
-            "SELECT setval('settings_id_seq', COALESCE((SELECT MAX(id) FROM settings), 0) + 1, false);"
-        )
+        # выравниваем sequence
+        op.execute("SELECT setval('settings_id_seq', COALESCE((SELECT MAX(id) FROM settings), 0) + 1, false);")
 
-        # индексы
+        # ensure unique key (если нет constraint)
+        # не пытаемся добавлять constraint через инспектор (сложно), просто создадим unique index если не существует
         insp = inspect(bind)
-        if not _index_exists(insp, "settings", "ix_settings_id"):
+        if _col_exists(insp, "settings", "key") and not _index_exists(insp, "settings", "ix_settings_key"):
+            op.create_index("ix_settings_key", "settings", ["key"], unique=True)
+
+    # indexes for settings
+    insp = inspect(bind)
+    if _table_exists(insp, "settings"):
+        if _col_exists(insp, "settings", "id") and not _index_exists(insp, "settings", "ix_settings_id"):
             op.create_index("ix_settings_id", "settings", ["id"], unique=False)
-        # unique на key может уже быть как PK — но отдельный unique-index не мешает
-        if not _index_exists(insp, "settings", "ix_settings_key"):
+        if _col_exists(insp, "settings", "key") and not _index_exists(insp, "settings", "ix_settings_key"):
             op.create_index("ix_settings_key", "settings", ["key"], unique=True)
 
 
@@ -207,35 +223,12 @@ def downgrade() -> None:
         if _index_exists(insp, "settings", "ix_settings_id"):
             op.drop_index("ix_settings_id", table_name="settings")
 
-        insp = inspect(bind)
-        if _col_exists(insp, "settings", "updated_at"):
-            op.drop_column("settings", "updated_at")
-        if _col_exists(insp, "settings", "created_at"):
-            op.drop_column("settings", "created_at")
-        if _col_exists(insp, "settings", "id"):
-            op.drop_column("settings", "id")
+        op.drop_table("settings")
 
-        op.execute("DROP SEQUENCE IF EXISTS settings_id_seq;")
+    op.execute("DROP SEQUENCE IF EXISTS settings_id_seq;")
 
-        # типы обратно
-        if _col_exists(insp, "settings", "description"):
-            op.alter_column(
-                "settings",
-                "description",
-                existing_type=sa.Text(),
-                type_=sa.VARCHAR(length=255),
-                existing_nullable=True,
-            )
-        if _col_exists(insp, "settings", "key"):
-            op.alter_column(
-                "settings",
-                "key",
-                existing_type=sa.String(length=150),
-                type_=sa.VARCHAR(length=100),
-                existing_nullable=False,
-            )
-
-    # notifications — откатывать индексы не обязательно, но можно
+    # notifications indexes
+    insp = inspect(bind)
     if _table_exists(insp, "notifications"):
         insp = inspect(bind)
         if _index_exists(insp, "notifications", "ix_notifications_type"):
@@ -245,11 +238,8 @@ def downgrade() -> None:
         if _index_exists(insp, "notifications", "ix_notifications_entity_id"):
             op.drop_index("ix_notifications_entity_id", table_name="notifications")
 
-        # user_id обратно nullable=True (если хочешь строго)
-        if _col_exists(insp, "notifications", "user_id"):
-            op.alter_column("notifications", "user_id", existing_type=sa.INTEGER(), nullable=True)
-
-    # bans.reason обратно nullable=True
+    # bans.reason nullable back
+    insp = inspect(bind)
     if _table_exists(insp, "bans") and _col_exists(insp, "bans", "reason"):
         insp = inspect(bind)
         if _index_exists(insp, "bans", "ix_bans_user_id"):
@@ -257,6 +247,7 @@ def downgrade() -> None:
         op.alter_column("bans", "reason", existing_type=sa.VARCHAR(length=255), nullable=True)
 
     # audit_logs
+    insp = inspect(bind)
     if _table_exists(insp, "audit_logs"):
         insp = inspect(bind)
         if _index_exists(insp, "audit_logs", "ix_audit_logs_user_id"):
@@ -268,27 +259,6 @@ def downgrade() -> None:
         if _index_exists(insp, "audit_logs", "ix_audit_logs_action"):
             op.drop_index("ix_audit_logs_action", table_name="audit_logs")
 
-        # возвращаем старые колонки (чтобы downgrade был честным)
-        insp = inspect(bind)
-        if not _col_exists(insp, "audit_logs", "object_id"):
-            op.add_column("audit_logs", sa.Column("object_id", sa.Integer(), nullable=True))
-        if not _col_exists(insp, "audit_logs", "meta"):
-            op.add_column("audit_logs", sa.Column("meta", sa.Text(), nullable=True))
-        if not _col_exists(insp, "audit_logs", "object_type"):
-            op.add_column("audit_logs", sa.Column("object_type", sa.String(length=50), nullable=True))
+        op.drop_table("audit_logs")
 
-        insp = inspect(bind)
-        if _col_exists(insp, "audit_logs", "updated_at"):
-            op.drop_column("audit_logs", "updated_at")
-        if _col_exists(insp, "audit_logs", "user_agent"):
-            op.drop_column("audit_logs", "user_agent")
-        if _col_exists(insp, "audit_logs", "ip"):
-            op.drop_column("audit_logs", "ip")
-        if _col_exists(insp, "audit_logs", "data"):
-            op.drop_column("audit_logs", "data")
-        if _col_exists(insp, "audit_logs", "entity_id"):
-            op.drop_column("audit_logs", "entity_id")
-        if _col_exists(insp, "audit_logs", "entity"):
-            op.drop_column("audit_logs", "entity")
-
-    # debts в downgrade не трогаем — это отдельная миграция restore_debts
+    # debts не восстанавливаем тут — это отдельно в restore_debts миграции

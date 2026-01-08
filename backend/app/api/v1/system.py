@@ -11,7 +11,7 @@ router = APIRouter()
 
 
 @router.get("/ping", summary="Проверка работы API без авторизации")
-async def ping(request: Request):
+def ping(request: Request):
     """
     Простейший endpoint, который всегда доступен.
 
@@ -25,7 +25,7 @@ async def ping(request: Request):
     "/me",
     summary="Информация о текущем пользователе Telegram",
 )
-async def get_me(user=Depends(get_current_user)):
+def get_me(user=Depends(get_current_user)):
     """
     Пример защищённого endpoint'а.
 

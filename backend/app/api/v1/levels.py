@@ -13,7 +13,7 @@ router = APIRouter(prefix="/levels", tags=["levels"])
 
 
 @router.get("")
-async def list_levels(
+def list_levels(
     db: Session = Depends(get_db),
 ) -> dict:
     """

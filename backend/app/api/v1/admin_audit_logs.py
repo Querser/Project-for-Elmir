@@ -1,27 +1,47 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
-from sqlalchemy.ext.asyncio import AsyncSession
+from typing import Any
 
-from app.core.deps import get_db, require_admin
+from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
+
+from app.core.deps import get_db
+
+try:
+    from app.core.deps import require_admin
+except ImportError:  # fallback
+    from app.core.deps import get_current_admin_user as require_admin  # type: ignore
+
 from app.schemas.audit_log import AuditLogListResponse, AuditLogResponse
 from app.services.audit_log_service import list_audit_logs
 
 router = APIRouter(prefix="/admin/audit-logs", tags=["admin-audit-logs"])
 
 
+def _to_schema(cls, obj):
+    if hasattr(cls, "model_validate"):
+        return cls.model_validate(obj, from_attributes=True)
+    if hasattr(cls, "from_orm"):
+        return cls.from_orm(obj)
+    return cls(**obj)
+
+
+def _dump(model):
+    return model.model_dump() if hasattr(model, "model_dump") else model.dict()
+
+
 @router.get("", response_model=dict)
-async def admin_audit_logs_list(
+def admin_audit_logs_list(
     limit: int = 50,
     offset: int = 0,
     user_id: int | None = None,
     action: str | None = None,
     entity: str | None = None,
     entity_id: int | None = None,
-    db: AsyncSession = Depends(get_db),
-    _admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+    _admin: Any = Depends(require_admin),
 ):
-    items, total = await list_audit_logs(
+    items, total = list_audit_logs(
         db,
         limit=limit,
         offset=offset,
@@ -31,9 +51,6 @@ async def admin_audit_logs_list(
         entity_id=entity_id,
     )
 
-    dto_items = [AuditLogResponse(**x).model_dump() for x in items]
-    return {
-        "ok": True,
-        "result": AuditLogListResponse(items=[AuditLogResponse(**x) for x in items], total=total, limit=limit, offset=offset).model_dump(),
-        "error": None,
-    }
+    dto_items = [_to_schema(AuditLogResponse, x) for x in items]
+    result = AuditLogListResponse(items=dto_items, total=total, limit=limit, offset=offset)
+    return {"ok": True, "result": _dump(result), "error": None}

@@ -1,31 +1,59 @@
-# Python virtual environments
-.venv/
-venv/
-
-# IDE and editor
-.idea/
-.vscode/
-
-# Python cache
+# Python
 __pycache__/
-*.pyc
-
-# Node.js
-node_modules/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.eggs/
 dist/
 build/
-npm-debug.log*
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.cache/
 
-# Env files (на прод они не должны попадать)
+# Virtualenv
+.venv/
+venv/
+ENV/
+env/
+
+# dotenv
 .env
 .env.*
-!.env.example   # но .env.example как шаблон можно коммитить
-.env.dev
+!.env.example
 
 # Logs
-logs/
 *.log
 
-# System
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# OS
 .DS_Store
 Thumbs.db
+
+# Node / frontend
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+dist/
+build/
+
+# Docker
+*.pid
+docker-data/
+**/docker-data/
+**/.docker/
+
+# OpenAPI artifacts
+openapi.json
+artifacts/openapi.json
+artifacts/

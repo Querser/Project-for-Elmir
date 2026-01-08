@@ -1,242 +1,318 @@
-# backend/app/services/enrollment_service.py
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Tuple, List
+from datetime import datetime, timezone
+from typing import Any, Optional, Sequence
 
 from sqlalchemy.orm import Session
 
-from app.core.exceptions import AppException
-from app.models.enrollment import Enrollment, EnrollmentStatus
+from app.core.exceptions import AppException, ErrorCode
+from app.policies import CANCEL_MIN_DELTA
+
 from app.models.training import Training
-from app.models.user import User
-from app.services.ban_service import has_active_ban
-from app.services.debt_service import has_open_debts
+from app.models.enrollment import Enrollment, EnrollmentStatus
 
 
-# Настройки логики (пока нули — ограничения по времени не действуют,
-# при необходимости поменяешь на нужное количество часов)
-MIN_HOURS_BEFORE_ENROLL = 0
-MIN_HOURS_BEFORE_CANCEL = 0
+def _now_aware() -> datetime:
+    """UTC aware datetime."""
+    return datetime.now(timezone.utc)
 
 
-def _ensure_training_exists(db: Session, training_id: int) -> Training:
-    training = (
-        db.query(Training)
-        .filter(Training.id == training_id)
-        .one_or_none()
+def _now_like(dt: datetime) -> datetime:
+    """
+    Возвращает now в формате, совместимом с dt:
+    - dt aware -> now aware (UTC)
+    - dt naive -> now naive (UTC naive)
+    """
+    if dt.tzinfo is None:
+        return datetime.utcnow()
+    return _now_aware()
+
+
+def _enum_member(enum_cls: Any, *names: str, fallback_value: str) -> Any:
+    """
+    Пытаемся взять enum-атрибут, иначе возвращаем значение по умолчанию.
+    Работает и если EnrollmentStatus = Enum, и если это просто набор строк.
+    """
+    for n in names:
+        if hasattr(enum_cls, n):
+            return getattr(enum_cls, n)
+    try:
+        return enum_cls(fallback_value)
+    except Exception:
+        return fallback_value
+
+
+def ACTIVE_STATUS() -> Any:
+    return _enum_member(EnrollmentStatus, "ACTIVE", "ENROLLED", "CONFIRMED", fallback_value="active")
+
+
+def CANCELLED_STATUS() -> Any:
+    return _enum_member(EnrollmentStatus, "CANCELLED", "CANCELED", fallback_value="cancelled")
+
+
+def CANCELLED_LATE_STATUS() -> Any:
+    return _enum_member(EnrollmentStatus, "CANCELLED_LATE", "CANCELED_LATE", fallback_value="cancelled_late")
+
+
+def RESERVE_STATUS() -> Any:
+    return _enum_member(EnrollmentStatus, "RESERVE", "WAITLIST", "STANDBY", fallback_value="reserve")
+
+
+def _status_to_str(st: Any) -> str:
+    try:
+        s = str(st)
+    except Exception:
+        return ""
+    return s.lower().strip()
+
+
+def _is_active(st: Any) -> bool:
+    if st == ACTIVE_STATUS():
+        return True
+    return _status_to_str(st) in {"active", "enrolled", "confirmed"}
+
+
+def _is_reserve(st: Any) -> bool:
+    if st == RESERVE_STATUS():
+        return True
+    return _status_to_str(st) in {"reserve", "waitlist", "standby"}
+
+
+def _is_cancelled(st: Any) -> bool:
+    if st in (CANCELLED_STATUS(), CANCELLED_LATE_STATUS()):
+        return True
+    return _status_to_str(st) in {"cancelled", "canceled", "cancelled_late", "canceled_late"}
+
+
+def _get_training(db: Session, training_id: int) -> Training:
+    t = db.query(Training).filter(Training.id == training_id).first()
+    if not t:
+        raise AppException.not_found(ErrorCode.TRAINING_NOT_FOUND, f"Training {training_id} not found")
+
+    # отменённые тренировки не записываем
+    st = getattr(t, "status", None)
+    if isinstance(st, str) and st.lower() in {"cancelled", "canceled"}:
+        raise AppException.conflict(ErrorCode.TRAINING_CANCELLED, "Training is cancelled")
+
+    return t
+
+
+def _training_capacity(t: Training) -> tuple[int, int]:
+    main = getattr(t, "capacity_main", None)
+    reserve = getattr(t, "capacity_reserve", None)
+    return int(main or 0), int(reserve or 0)
+
+
+def _active_enrollments_count(t: Training) -> int:
+    enrollments = getattr(t, "enrollments", []) or []
+    cnt = 0
+    for e in enrollments:
+        if _is_active(getattr(e, "status", None)):
+            cnt += 1
+    return cnt
+
+
+def _estimate_amount(training: Training, enrollment: Optional[Enrollment] = None) -> float:
+    for obj in (enrollment, training):
+        if obj is None:
+            continue
+        for attr in ("amount", "price", "final_price"):
+            v = getattr(obj, attr, None)
+            if isinstance(v, (int, float)):
+                return float(v)
+    return 0.0
+
+
+# ---------------------------------------------------------------------
+# PUBLIC API (то, что обычно импортируют роутеры)
+# ---------------------------------------------------------------------
+
+def get_enrollment_by_id(db: Session, *, enrollment_id: int) -> Enrollment:
+    e = db.query(Enrollment).filter(Enrollment.id == enrollment_id).first()
+    if not e:
+        raise AppException.not_found(ErrorCode.ENROLLMENT_NOT_FOUND, f"Enrollment {enrollment_id} not found")
+    return e
+
+
+def get_user_enrollments(
+    db: Session,
+    *,
+    user_id: int,
+    include_cancelled: bool = False,
+) -> list[Enrollment]:
+    q = db.query(Enrollment).filter(Enrollment.user_id == user_id)
+
+    enrollments = q.order_by(Enrollment.id.desc()).all()
+    if include_cancelled:
+        return enrollments
+
+    return [e for e in enrollments if not _is_cancelled(getattr(e, "status", None))]
+
+
+def get_training_roster(
+    db: Session,
+    *,
+    training_id: int,
+    include_reserve: bool = True,
+    include_cancelled: bool = False,
+) -> list[Enrollment]:
+    """
+    Роутеры обычно ждут эту функцию.
+    По умолчанию возвращает активных + (опционально) резерв.
+    """
+    # проверим, что тренировка существует (и не отменена)
+    _get_training(db, training_id)
+
+    enrollments: list[Enrollment] = (
+        db.query(Enrollment)
+        .filter(Enrollment.training_id == training_id)
+        .order_by(Enrollment.id.asc())
+        .all()
     )
-    if training is None:
-        raise AppException(
-            error_code="NOT_FOUND",
-            message="Тренировка не найдена",
-        )
-    if training.is_cancelled:
-        raise AppException(
-            error_code="BAD_REQUEST",
-            message="Тренировка отменена",
-        )
-    return training
 
+    if include_cancelled:
+        return enrollments
 
-def _check_time_before(start_at: datetime, min_hours: int, *, error_code: str, message: str) -> None:
-    if min_hours <= 0:
-        return
+    filtered: list[Enrollment] = []
+    for e in enrollments:
+        st = getattr(e, "status", None)
+        if _is_active(st):
+            filtered.append(e)
+            continue
+        if include_reserve and _is_reserve(st):
+            filtered.append(e)
+            continue
 
-    now = datetime.utcnow()
-    delta_seconds = (start_at - now).total_seconds()
-    if delta_seconds < min_hours * 3600:
-        raise AppException(error_code=error_code, message=message)
+    return filtered
 
 
 def enroll_user_to_training(
     db: Session,
     *,
-    user: User,
     training_id: int,
+    user_id: int,
+    is_paid: bool = False,
+    price_tier_id: Optional[int] = None,
 ) -> Enrollment:
-    """
-    Записываем пользователя на тренировку:
-    - проверка тренировки (существует/не отменена)
-    - проверка ограничений: баны + долги (этап 8)
-    - обработка повторной записи (учёт UNIQUE (user_id, training_id)):
-        * если уже ACTIVE -> ALREADY_ENROLLED
-        * если есть CANCELLED -> реактивируем (UPDATE), а не INSERT (чиним 500)
-    - расчёт: основа или резерв
-    """
+    training = _get_training(db, training_id)
 
-    # ЭТАП 8: запрет при активном бане или открытых долгах
-    if has_active_ban(db, user_id=user.id):
-        raise AppException(error_code="FORBIDDEN", message="Запись недоступна: у вас активный бан")
-
-    if has_open_debts(db, user_id=user.id):
-        raise AppException(error_code="FORBIDDEN", message="Запись недоступна: у вас есть неоплаченный долг")
-
-    training = _ensure_training_exists(db, training_id)
-
-    _check_time_before(
-        training.start_at,
-        MIN_HOURS_BEFORE_ENROLL,
-        error_code="TOO_LATE",
-        message="Запись на тренировку уже недоступна",
-    )
-
-    # ВАЖНО: ищем ЛЮБУЮ запись (ACTIVE/CANCELLED), потому что в БД UNIQUE (user_id, training_id)
-    existing_any = (
+    existing = (
         db.query(Enrollment)
-        .filter(
-            Enrollment.user_id == user.id,
-            Enrollment.training_id == training.id,
-        )
-        .one_or_none()
+        .filter(Enrollment.training_id == training_id, Enrollment.user_id == user_id)
+        .first()
     )
+    if existing:
+        raise AppException.conflict(ErrorCode.ALREADY_ENROLLED, "User already enrolled")
 
-    if existing_any and existing_any.status == EnrollmentStatus.ACTIVE:
-        # как раньше
-        raise AppException(
-            error_code="ALREADY_ENROLLED",
-            message="Вы уже записаны на эту тренировку",
-        )
+    main_cap, reserve_cap = _training_capacity(training)
+    active_cnt = _active_enrollments_count(training)
 
-    # Считаем заполненность (только ACTIVE!)
-    main_count = (
-        db.query(Enrollment)
-        .filter(
-            Enrollment.training_id == training.id,
-            Enrollment.is_reserve.is_(False),
-            Enrollment.status == EnrollmentStatus.ACTIVE,
-        )
-        .count()
-    )
+    status = ACTIVE_STATUS()
+    is_reserve = False
 
-    reserve_count = (
-        db.query(Enrollment)
-        .filter(
-            Enrollment.training_id == training.id,
-            Enrollment.is_reserve.is_(True),
-            Enrollment.status == EnrollmentStatus.ACTIVE,
-        )
-        .count()
-    )
+    if main_cap and active_cnt >= main_cap:
+        # main заполнен -> reserve
+        if reserve_cap and active_cnt < (main_cap + reserve_cap):
+            status = RESERVE_STATUS()
+            is_reserve = True
+        else:
+            raise AppException.conflict(ErrorCode.TRAINING_FULL, "Training is full")
 
-    if main_count < training.capacity_main:
-        is_reserve = False
-    elif reserve_count < training.capacity_reserve:
-        is_reserve = True
-    else:
-        raise AppException(
-            error_code="TRAINING_FULL",
-            message="Свободных мест на тренировке нет",
-        )
+    e = Enrollment(training_id=training_id, user_id=user_id)
 
-    # ✅ ФИКС: если запись была CANCELLED — реактивируем её (UPDATE вместо INSERT)
-    if existing_any and existing_any.status == EnrollmentStatus.CANCELLED:
-        existing_any.status = EnrollmentStatus.ACTIVE
-        existing_any.is_reserve = is_reserve
-        existing_any.is_paid = False
-        # Чтобы очередь/резерв были честными как при новой записи
-        existing_any.created_at = datetime.utcnow()
+    if hasattr(e, "status"):
+        setattr(e, "status", status)
+    if hasattr(e, "is_paid"):
+        setattr(e, "is_paid", bool(is_paid))
+    if hasattr(e, "is_reserve"):
+        setattr(e, "is_reserve", bool(is_reserve))
+    if price_tier_id is not None and hasattr(e, "price_tier_id"):
+        setattr(e, "price_tier_id", int(price_tier_id))
 
-        db.add(existing_any)
-        db.commit()
-        db.refresh(existing_any)
-        return existing_any
-
-    # Если записи не было вообще — создаём новую
-    enrollment = Enrollment(
-        user_id=user.id,
-        training_id=training.id,
-        is_reserve=is_reserve,
-        status=EnrollmentStatus.ACTIVE,
-        is_paid=False,
-    )
-    db.add(enrollment)
+    db.add(e)
     db.commit()
-    db.refresh(enrollment)
-    return enrollment
+    db.refresh(e)
+    return e
+
+
+def cancel_enrollment(db: Session, *, enrollment_id: int, user_id: int) -> Enrollment:
+    e = db.query(Enrollment).filter(Enrollment.id == enrollment_id).first()
+    if not e:
+        raise AppException.not_found(ErrorCode.ENROLLMENT_NOT_FOUND, f"Enrollment {enrollment_id} not found")
+    if getattr(e, "user_id", None) != user_id:
+        raise AppException.forbidden("Not your enrollment")
+
+    training_id = int(getattr(e, "training_id"))
+    training = _get_training(db, training_id)
+
+    start_at = getattr(training, "start_at", None)
+    if not isinstance(start_at, datetime):
+        if hasattr(e, "status"):
+            setattr(e, "status", CANCELLED_STATUS())
+        db.commit()
+        db.refresh(e)
+        return e
+
+    now = _now_like(start_at)
+    late = now >= (start_at - CANCEL_MIN_DELTA)
+
+    if hasattr(e, "status"):
+        setattr(e, "status", CANCELLED_LATE_STATUS() if late else CANCELLED_STATUS())
+    if hasattr(e, "cancelled_at"):
+        # cancelled_at лучше хранить aware; но если колонка у тебя naive — БД сама сконвертит
+        setattr(e, "cancelled_at", _now_aware())
+
+    db.add(e)
+
+    if late:
+        amount = _estimate_amount(training, e)
+
+        try:
+            from app.services.debt_service import create_open_debt_if_missing  # type: ignore
+            create_open_debt_if_missing(db, user_id=user_id, training_id=training.id, amount=amount)
+        except Exception:
+            pass
+
+        try:
+            from app.services.ban_service import ensure_auto_debt_ban  # type: ignore
+            ensure_auto_debt_ban(db, user_id=user_id, training_id=training.id)
+        except Exception:
+            pass
+
+    db.commit()
+    db.refresh(e)
+    return e
 
 
 def cancel_enrollment_for_user(
     db: Session,
     *,
-    user: User,
-    enrollment_id: int,
+    user_id: int,
+    training_id: Optional[int] = None,
+    enrollment_id: Optional[int] = None,
 ) -> Enrollment:
-    enrollment = (
+    """
+    Функция, которую импортирует роутер.
+
+    Поддерживает оба сценария:
+    - cancel_enrollment_for_user(db, user_id=..., training_id=...)
+    - cancel_enrollment_for_user(db, user_id=..., enrollment_id=...)
+    """
+    if enrollment_id is None and training_id is None:
+        raise AppException.validation("Either training_id or enrollment_id is required")
+
+    if enrollment_id is not None:
+        return cancel_enrollment(db, enrollment_id=int(enrollment_id), user_id=user_id)
+
+    e = (
         db.query(Enrollment)
-        .filter(Enrollment.id == enrollment_id)
-        .one_or_none()
+        .filter(Enrollment.user_id == user_id, Enrollment.training_id == int(training_id))
+        .first()
     )
-    if enrollment is None or enrollment.user_id != user.id:
-        raise AppException(
-            error_code="NOT_FOUND",
-            message="Запись не найдена",
+    if not e:
+        raise AppException.not_found(
+            ErrorCode.ENROLLMENT_NOT_FOUND,
+            f"Enrollment for user {user_id} and training {training_id} not found",
         )
 
-    training = enrollment.training or _ensure_training_exists(db, enrollment.training_id)
-
-    if enrollment.status != EnrollmentStatus.ACTIVE:
-        raise AppException(
-            error_code="BAD_REQUEST",
-            message="Нельзя отменить эту запись",
-        )
-
-    _check_time_before(
-        training.start_at,
-        MIN_HOURS_BEFORE_CANCEL,
-        error_code="TOO_LATE_TO_CANCEL",
-        message="Слишком поздно отменять запись",
-    )
-
-    enrollment.status = EnrollmentStatus.CANCELLED
-
-    if not enrollment.is_reserve:
-        reserve = (
-            db.query(Enrollment)
-            .filter(
-                Enrollment.training_id == training.id,
-                Enrollment.is_reserve.is_(True),
-                Enrollment.status == EnrollmentStatus.ACTIVE,
-            )
-            .order_by(Enrollment.created_at.asc())
-            .first()
-        )
-        if reserve:
-            reserve.is_reserve = False
-            db.add(reserve)
-
-    db.add(enrollment)
-    db.commit()
-    db.refresh(enrollment)
-    return enrollment
-
-
-def get_training_roster(
-    db: Session,
-    training_id: int,
-) -> Tuple[List[Enrollment], List[Enrollment]]:
-    _ensure_training_exists(db, training_id)
-
-    main = (
-        db.query(Enrollment)
-        .filter(
-            Enrollment.training_id == training_id,
-            Enrollment.status == EnrollmentStatus.ACTIVE,
-            Enrollment.is_reserve.is_(False),
-        )
-        .order_by(Enrollment.created_at.asc())
-        .all()
-    )
-
-    reserve = (
-        db.query(Enrollment)
-        .filter(
-            Enrollment.training_id == training_id,
-            Enrollment.status == EnrollmentStatus.ACTIVE,
-            Enrollment.is_reserve.is_(True),
-        )
-        .order_by(Enrollment.created_at.asc())
-        .all()
-    )
-
-    return main, reserve
+    return cancel_enrollment(db, enrollment_id=int(getattr(e, "id")), user_id=user_id)

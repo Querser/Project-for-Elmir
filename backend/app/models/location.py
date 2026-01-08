@@ -1,29 +1,30 @@
-# app/models/location.py
-from sqlalchemy import String, Integer, Float
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from sqlalchemy import Integer
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base
 
+if TYPE_CHECKING:
+    from .training import Training
+
 
 class Location(Base):
-    """
-    Локация (спортзал).
-    """
     __tablename__ = "locations"
 
+    # ВАЖНО: мы маппим только id — это гарантированно есть в таблице.
+    # Остальные колонки (какие бы они ни были) SQLAlchemy не обязаны знать,
+    # и это не будет ломать запросы trainings.
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
 
-    name: Mapped[str] = mapped_column(String(100), nullable=False)
-    address: Mapped[str] = mapped_column(String(255), nullable=False)
-    metro: Mapped[str | None] = mapped_column(String(100), nullable=True)
-
-    latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
-    longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
-
-    maps_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    video_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
-
-    trainings: Mapped[list["Training"]] = relationship("Training", back_populates="location")
+    trainings: Mapped[list["Training"]] = relationship(
+        "Training",
+        back_populates="location",
+        lazy="selectin",
+        foreign_keys="Training.location_id",
+    )
 
     def __repr__(self) -> str:
-        return f"<Location id={self.id} name={self.name!r}>"
+        return f"<Location id={self.id}>"
