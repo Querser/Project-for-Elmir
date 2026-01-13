@@ -12,6 +12,9 @@ from .debt import Debt
 from .setting import Setting
 from .audit_log import AuditLog
 
+# ✅ ОБЯЗАТЕЛЬНО: чтобы mapper видел модель при конфигурации relationships
+from .rating import Rating  # noqa: F401
+
 # stage3 (обязательно, иначе alembic/mapper/импорты могут ломаться)
 from .price_tier import PriceTier  # noqa: F401
 
@@ -28,5 +31,6 @@ __all__ = [
     "Debt",
     "Setting",
     "AuditLog",
+    "Rating",
     "PriceTier",
 ]

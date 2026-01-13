@@ -1,57 +1,72 @@
 from __future__ import annotations
 
-from typing import Optional
-
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_db
-from app.models.rating import Rating
+from app.core.deps import get_db, get_current_user
+from app.core.responses import success_response
 from app.models.user import User
-from app.models.level import Level
+from app.services.rating_service import get_leaderboard, get_user_position, get_total_active_users
 
 router = APIRouter(prefix="/ratings", tags=["ratings"])
 
 
-@router.get("")
-def get_ratings(
-    level_id: Optional[int] = Query(default=None),
+@router.get("", response_model=dict)
+def leaderboard(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    q = (
-        db.query(
-            User.id.label("user_id"),
-            User.name.label("user_name"),
-            Level.id.label("level_id"),
-            Level.title.label("level_title"),
-            func.avg(Rating.score).label("avg_score"),
-            func.count(Rating.id).label("votes"),
+    """
+    GET /api/v1/ratings
+    Возвращает список игроков по рейтингу (rating, cups).
+    """
+    users, total = get_leaderboard(db, limit=limit, offset=offset)
+
+    items = []
+    for i, u in enumerate(users, start=offset + 1):
+        items.append(
+            {
+                "place": i,
+                "user_id": u.id,
+                "telegram_id": u.telegram_id,
+                "username": u.username,
+                "first_name": u.first_name,
+                "last_name": u.last_name,
+                "rating": u.rating,
+                "cups": u.cups,
+                "level_id": u.level_id,
+            }
         )
-        .join(Rating, Rating.user_id == User.id)
-        .outerjoin(Level, Level.id == Rating.level_id)
-        .group_by(User.id, User.name, Level.id, Level.title)
-        .order_by(func.avg(Rating.score).desc())
+
+    return success_response(
+        {
+            "items": items,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
     )
 
-    if level_id is not None:
-        q = q.filter(Rating.level_id == level_id)
 
-    rows = q.all()
-    return [
+@router.get("/me", response_model=dict)
+def my_rating(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    GET /api/v1/ratings/me
+    Место текущего пользователя в рейтинге.
+    """
+    position = get_user_position(db, user)
+    total = get_total_active_users(db)
+
+    return success_response(
         {
-            "user_id": r.user_id,
-            "user_name": r.user_name,
-            "level_id": r.level_id,
-            "level_title": r.level_title,
-            "avg_score": float(r.avg_score) if r.avg_score is not None else 0.0,
-            "votes": int(r.votes or 0),
+            "user_id": user.id,
+            "rating": user.rating,
+            "cups": user.cups,
+            "position": position,
+            "total_users": total,
         }
-        for r in rows
-    ]
-
-
-@router.get("/levels")
-def rating_levels(db: Session = Depends(get_db)):
-    levels = db.query(Level).order_by(Level.id.asc()).all()
-    return [{"id": l.id, "title": l.title} for l in levels]
+    )

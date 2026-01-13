@@ -1,0 +1,62 @@
+body {
+  font-family: "Inter", sans-serif;
+  background: #f6f8fa;
+  color: #111827;
+  margin: 0;
+  padding: 0;
+}
+
+.app {
+  max-width: 480px;
+  margin: 0 auto;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: white;
+}
+
+.content {
+  flex: 1;
+  padding: 16px;
+  overflow-y: auto;
+}
+
+.card {
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.05);
+  padding: 14px;
+  margin-bottom: 10px;
+}
+
+button {
+  cursor: pointer;
+}
+
+.primary-btn {
+  width: 100%;
+  border: none;
+  border-radius: 999px;
+  padding: 12px;
+  background: #2f7df6;
+  color: white;
+  font-weight: 600;
+}
+
+.tabbar {
+  display: flex;
+  justify-content: space-around;
+  border-top: 1px solid #e5e7eb;
+  background: white;
+  padding: 8px 0;
+}
+.tabbar button {
+  background: none;
+  border: none;
+  color: #6b7280;
+  font-size: 13px;
+}
+.tabbar button.active {
+  color: #2f7df6;
+  font-weight: 600;
+}
