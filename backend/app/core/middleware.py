@@ -1,157 +1,113 @@
+# app/core/middleware.py
 from __future__ import annotations
 
 import logging
+import os
 import time
-from typing import Callable, Awaitable
+from typing import Callable, Optional
 
-from fastapi import Request
-from fastapi.responses import Response
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.types import ASGIApp
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
 
-from app.core.config import settings
-from app.core.exceptions import AppException
-from app.core.telegram_auth import (
-    TelegramAuthError,
-    validate_telegram_init_data,
-)
-from app.db.session import SessionLocal
-from app.models.user import User
-from app.services.user_service import get_or_create_user_from_telegram
-
-logger = logging.getLogger("app.middleware")
+log = logging.getLogger("app.middleware")
 
 
-# --------- Логирование запросов --------- #
+def _env_truthy(name: str, default: bool = False) -> bool:
+    v = os.getenv(name)
+    if v is None:
+        return default
+    v = v.strip().lower()
+    return v in {"1", "true", "yes", "y", "on"}
+
+
+def _is_dev_env() -> bool:
+    env = (os.getenv("ENVIRONMENT") or "").strip().lower()
+    return env in {"dev", "development", "local"}
+
+
+def _dev_mode_enabled() -> bool:
+    # Явный dev-тумблер
+    if _env_truthy("ALLOW_INSECURE_HEADER_AUTH", False):
+        return True
+    # Твой dev-флаг
+    if _env_truthy("DEV_AUTO_CREATE_USER_FROM_HEADER", False):
+        return True
+    # Если задан дефолтный TG — это тоже dev-настройка
+    if (os.getenv("DEV_DEFAULT_TELEGRAM_ID") or "").strip():
+        return True
+    # По окружению
+    if _is_dev_env():
+        return True
+    return False
+
+
+def _unauthorized(required_header: str = "X-Telegram-Init-Data") -> JSONResponse:
+    return JSONResponse(
+        {
+            "error": {
+                "code": "unauthorized",
+                "message": "Пользователь не авторизован через Telegram",
+                "details": {"required_header": required_header},
+            }
+        },
+        status_code=401,
+    )
+
+
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
     """
-    Простое логирование запросов/ответов:
-    метод, путь, статус, время обработки.
+    Только логирование запросов (не авторизация).
     """
 
-    def __init__(self, app: ASGIApp) -> None:
-        super().__init__(app)
-
-    async def dispatch(
-        self,
-        request: Request,
-        call_next: Callable[[Request], Awaitable[Response]],
-    ) -> Response:  # type: ignore[override]
+    async def dispatch(self, request: Request, call_next: Callable[[Request], Response]) -> Response:
         start = time.perf_counter()
-        path = request.url.path
-
+        response: Optional[Response] = None
         try:
             response = await call_next(request)
-        except Exception:
-            logger.exception("Unhandled error for %s %s", request.method, path)
-            raise
-
-        duration_ms = (time.perf_counter() - start) * 1000
-        logger.info(
-            "%s %s -> %s (%.2f ms)",
-            request.method,
-            path,
-            response.status_code,
-            duration_ms,
-        )
-        return response
+            return response
+        finally:
+            took_ms = (time.perf_counter() - start) * 1000.0
+            status_code = getattr(response, "status_code", 500)
+            log.info("%s %s -> %s (%.2f ms)", request.method, request.url.path, status_code, took_ms)
 
 
-# --------- Telegram WebApp авторизация --------- #
 class TelegramAuthMiddleware(BaseHTTPMiddleware):
     """
-    Middleware, который:
-    - читает заголовок X-Telegram-Init-Data
-    - валидирует подпись Telegram
-    - создаёт/обновляет пользователя в БД
-    - кладёт User в request.state.user
+    PROD: требует X-Telegram-Init-Data для /api/v1/*
+    DEV: НЕ требует initData (чтобы работали X-Telegram-Id / DEV_DEFAULT_TELEGRAM_ID через deps.py)
     """
 
-    def __init__(self, app: ASGIApp) -> None:
-        super().__init__(app)
-
-    async def dispatch(
-        self,
-        request: Request,
-        call_next: Callable[[Request], Awaitable[Response]],
-    ) -> Response:  # type: ignore[override]
-        # По умолчанию пользователя нет
-        request.state.user = None
-
-        path = request.url.path
-
-        # Разрешаем технические эндпоинты без авторизации
-        if path in ("/health", "/api/v1/ping"):
+    async def dispatch(self, request: Request, call_next: Callable[[Request], Response]) -> Response:
+        # OPTIONS всегда пропускаем
+        if request.method.upper() == "OPTIONS":
             return await call_next(request)
 
-        init_data = request.headers.get("X-Telegram-Init-Data")
-        if not init_data:
-            # Нет Telegram-данных — запрос не авторизован,
-            # но сам эндпоинт решает, критично это или нет.
+        path = request.url.path or ""
+
+        # DEV: полностью пропускаем, дальше разрулит deps.py
+        if _dev_mode_enabled():
             return await call_next(request)
 
-        bot_token = settings.telegram_bot_token
-        if not bot_token:
-            logger.error("TELEGRAM_BOT_TOKEN не задан, Telegram-авторизация невозможна")
-            return await call_next(request)
-
-        # Валидируем initData
-        try:
-            tg_init = validate_telegram_init_data(
-                init_data=init_data,
-                bot_token=bot_token,
-                max_age_seconds=24 * 60 * 60,
-            )
-        except TelegramAuthError as exc:
-            logger.warning(
-                "Telegram auth error on %s: %s",
-                path,
-                exc.message,
-            )
-            # Пользователь не считается авторизованным
-            return await call_next(request)
-        except Exception:
-            logger.exception("Unexpected error while validating Telegram initData")
-            return await call_next(request)
-
-        if not tg_init.user or "id" not in tg_init.user:
-            logger.warning("Telegram initData does not contain 'user.id'")
-            return await call_next(request)
-
-        tg_user = tg_init.user
-
-        # Создаём / обновляем пользователя в БД
-        try:
-            with SessionLocal() as db:
-                user = get_or_create_user_from_telegram(
-                    db=db,
-                    telegram_id=tg_user["id"],
-                    username=tg_user.get("username"),
-                    first_name=tg_user.get("first_name"),
-                    last_name=tg_user.get("last_name"),
-                    phone=None,  # на будущее, если решим брать телефон
-                )
-                request.state.user = user
-        except Exception:
-            logger.exception("Error while getting/creating user from Telegram initData")
-            request.state.user = None
+        # PROD: для API требуем initData
+        if path.startswith("/api/v1"):
+            init_data = request.headers.get("X-Telegram-Init-Data")
+            if not init_data:
+                return _unauthorized("X-Telegram-Init-Data")
 
         return await call_next(request)
 
 
-# --------- Зависимость для эндпоинтов --------- #
-async def get_current_user(request: Request) -> User:
-    """
-    FastAPI-зависимость. Используется как Depends(get_current_user).
+# -------------------------------------------------------------------
+# BACKWARD COMPATIBILITY (чтобы старые импорты не падали)
+# -------------------------------------------------------------------
+# Некоторые роуты у тебя импортируют get_current_user из middleware.
+# Реэкспортируем правильные зависимости из deps.py.
+from app.core.deps import (  # noqa: E402
+    get_current_user,
+    get_current_user_optional,
+    require_admin,
+)
 
-    Если пользователь не авторизован через Telegram, бросаем AppException
-    с кодом UNAUTHORIZED.
-    """
-    user = getattr(request.state, "user", None)
-    if user is None:
-        raise AppException(
-            error_code="UNAUTHORIZED",
-            message="Пользователь не авторизован через Telegram",
-            status_code=401,
-        )
-    return user
+# На случай если где-то импортировали старые имена:
+LoggingMiddleware = RequestLoggingMiddleware

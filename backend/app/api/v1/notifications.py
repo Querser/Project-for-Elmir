@@ -21,7 +21,8 @@ def get_notifications(
     current_user: User = Depends(get_current_user),
 ):
     items, total = NotificationService.list_user_notifications(db, current_user.id, limit, offset)
-    return success_response(NotificationListOut(items=items, total=total))
+    return success_response(NotificationListOut(items=items, total=total, limit=limit, offset=offset))
+
 
 
 @router.post("/{notification_id}/read", response_model=dict)

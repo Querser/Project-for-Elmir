@@ -858,7 +858,7 @@
       <div class="profile-main">
         <div class="profile-name" id="mini-name">Профиль</div>
         <div class="profile-sub" id="mini-level">Уровень: —</div>
-        <div class="profile-sub" style="margin-top:4px;">Рейтинг игрока</div>
+        <div class="profile-sub" style="margin-top:4px;">Кубки игрока</div>
       </div>
       <div class="profile-rating-pill" id="mini-rating">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -944,7 +944,7 @@
       <div class="profile-link" id="btn-edit-profile">Редактировать профиль →</div>
     </div>
 
-    <!-- Форма редактирования (этап 12.5) -->
+    <!-- Форма редактирования (часть этапа 12) -->
     <div class="profile-form" id="profile-form" style="display:none;">
       <div class="field">
         <label>ФИО</label>
@@ -956,6 +956,7 @@
           <option value="">—</option>
           <option value="male">Мужской</option>
           <option value="female">Женский</option>
+          <option value="other">Другое</option>
         </select>
       </div>
       <div class="field">
@@ -996,9 +997,7 @@
 
     <div class="details-card">
       <div class="details-title" id="details-title">—</div>
-      <ul class="details-list" id="details-prices">
-        <!-- optional -->
-      </ul>
+      <ul class="details-list" id="details-prices"></ul>
     </div>
 
     <div class="details-card">
@@ -1058,7 +1057,6 @@
       <h2 class="topbar-title" style="font-size:22px;">Фильтры</h2>
     </div>
 
-    <!-- В референсе фильтры статичные — оставляем верстку, но даем им работу -->
     <div class="filters-section">
       <div class="filters-section-title">Тип тренировки</div>
       <div class="filter-option" data-filter="type" data-value="Классика">
@@ -1221,22 +1219,15 @@
 
 <script>
   // ==========================================================
-  // ЭТАП 12: интеграция mini-app по плану + ТЗ (UI строго как референс)
+  // ЭТАП 12 (часть 1): Mini App shell + интеграция с API/Telegram
+  // НЕ ЛОМАЕМ дизайн/верстку. Исправления только в JS-логике API.
+  //
+  // Важно про API_BASE:
+  // - Если фронт открыт на :8081 (docker miniapp) или :5173 (vite dev),
+  //   по умолчанию пойдём на backend :8001.
+  // - Можно переопределить через localStorage ключ "API_BASE"
+  //   или параметром URL ?api_base=http://localhost:8001
   // ==========================================================
-
-  // ========== Настройка API (поправь, если у тебя другие урлы) ==========
-  const API_BASE = ""; // same-origin
-  const API_ENDPOINTS = {
-    authTelegram: "/api/v1/auth/telegram",         // POST { init_data }
-    trainings: "/api/v1/trainings",               // GET ?date=YYYY-MM-DD + filters
-    trainingById: (id) => `/api/v1/trainings/${id}`, // GET
-    enroll: (id) => `/api/v1/trainings/${id}/enroll`, // POST / DELETE (если по-другому — поменяй)
-    rating: "/api/v1/rating",                     // GET ?level=...
-    profile: "/api/v1/profile",                   // GET / PATCH
-    notifications: "/api/v1/notifications",       // GET
-    contacts: "/api/v1/contacts",                 // GET (опционально)
-    calendar: (id) => `/api/v1/trainings/${id}/calendar` // GET (опционально)
-  };
 
   // ========= Utilities =========
   function $(selector, root = document) { return root.querySelector(selector); }
@@ -1276,6 +1267,20 @@
     return s ? s : fallback;
   }
 
+  function unwrap(data) {
+    if (data && typeof data === "object" && data.ok === true && ("result" in data)) return data.result;
+    return data;
+  }
+
+  function sameLocalDate(iso, dateObj) {
+    if (!iso) return false;
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return false;
+    return d.getFullYear() === dateObj.getFullYear()
+      && d.getMonth() === dateObj.getMonth()
+      && d.getDate() === dateObj.getDate();
+  }
+
   // ========= Telegram init =========
   const tg = window.Telegram?.WebApp || null;
   const tgInitData = tg?.initData || "";
@@ -1285,18 +1290,72 @@
     try { tg.ready(); tg.expand(); } catch(e) {}
   }
 
+  // ========= Runtime params (удобно для локального теста) =========
+  (function applyRuntimeParams() {
+    const p = new URLSearchParams(location.search);
+
+    const apiBase = p.get("api_base");
+    if (apiBase) localStorage.setItem("API_BASE", apiBase);
+
+    const userId = p.get("user_id");
+    if (userId) localStorage.setItem("X_USER_ID", userId);
+
+    const tgId = p.get("tg_id");
+    if (tgId) localStorage.setItem("X_TG_ID", tgId);
+  })();
+
+  function computeApiBase() {
+    const port = String(location.port || "");
+    const host = location.hostname;
+    const proto = location.protocol;
+    // типичные dev-порты фронта
+    const devPorts = new Set(["8081", "5173", "4173", "3000"]);
+    if (devPorts.has(port)) return `${proto}//${host}:8001`;
+    return ""; // прод: если настроен reverse-proxy на тот же домен
+  }
+
+  const API_BASE = (localStorage.getItem("API_BASE") ?? computeApiBase()).trim();
+
+  const API_ENDPOINTS = {
+    ping: "/api/v1/ping",
+    me: "/api/v1/me",
+
+    trainings: "/api/v1/trainings",
+    trainingById: (id) => `/api/v1/trainings/${id}`,
+
+    enrollments: "/api/v1/enrollments",
+    roster: (trainingId) => `/api/v1/enrollments/training/${trainingId}`,
+    enrollmentCancel: (enrollmentId) => `/api/v1/enrollments/${enrollmentId}/cancel`,
+
+    ratings: "/api/v1/ratings",
+    levels: "/api/v1/levels",
+
+    profile: "/api/v1/profile/me",
+
+    notifications: "/api/v1/notifications"
+  };
+
   // ========= App state =========
   const state = {
-    token: localStorage.getItem("access_token") || "",
     selectedDate: new Date(),
-    city: "Москва", // можно заменить на то, что приходит с бэка/профиля
+    city: "Москва",
+
+    // текущий пользователь (нужен, чтобы корректно отменять запись)
+    userId: null,
+
+    // словарь уровней: id -> name
+    levelsById: {},
+
     filters: {
       type: new Set(),
       level: new Set()
     },
+
     trainings: [],
     currentTraining: null,
+
     ratingLevel: "Новичок",
+
     profile: null,
     notifications: []
   };
@@ -1305,12 +1364,20 @@
   async function apiFetch(path, { method="GET", headers={}, body=null } = {}) {
     const h = { "Content-Type": "application/json", ...headers };
 
-    // Вариант 1: токен
-    if (state.token) h["Authorization"] = `Bearer ${state.token}`;
-    // Вариант 2: initData от Telegram (если бэк так авторизует)
+    // 1) Telegram initData (для эндпоинтов, которые используют middleware: /me, /profile/me)
     if (tgInitData) h["X-Telegram-Init-Data"] = tgInitData;
 
-    const res = await fetch(API_BASE + path, {
+    // 2) Telegram ID (для эндпоинтов, которые используют deps.py: X-Telegram-Id / X-User-Id)
+    const tgId = tgUser?.id || localStorage.getItem("X_TG_ID");
+    if (tgId) h["X-Telegram-Id"] = String(tgId);
+
+    // 3) Если хочешь тестировать из браузера без Telegram — можно передать X-User-Id (локально)
+    const xUserId = localStorage.getItem("X_USER_ID");
+    if (xUserId) h["X-User-Id"] = String(xUserId);
+
+    const url = (API_BASE ? API_BASE : "") + path;
+
+    const res = await fetch(url, {
       method,
       headers: h,
       body: body ? JSON.stringify(body) : null
@@ -1321,29 +1388,16 @@
     try { data = text ? JSON.parse(text) : null; } catch(e) { data = text; }
 
     if (!res.ok) {
-      const msg = (data && (data.message || data.error)) ? (data.message || data.error) : `HTTP ${res.status}`;
+      const d = (data && typeof data === "object") ? data : null;
+      const msg =
+        (d && d.error && d.error.message) ? d.error.message :
+        (d && d.detail) ? d.detail :
+        (d && d.message) ? d.message :
+        `HTTP ${res.status}`;
       throw new Error(msg);
     }
+
     return data;
-  }
-
-  async function tryTelegramAuth() {
-    if (state.token) return;
-    if (!tgInitData) return;
-
-    try {
-      const data = await apiFetch(API_ENDPOINTS.authTelegram, {
-        method: "POST",
-        body: { init_data: tgInitData }
-      });
-      const token = data?.access_token || data?.token || data?.result?.access_token || "";
-      if (token) {
-        state.token = token;
-        localStorage.setItem("access_token", token);
-      }
-    } catch (e) {
-      // не падаем: возможно бэк авторизует по X-Telegram-Init-Data без отдельного эндпоинта
-    }
   }
 
   // ========= Navigation =========
@@ -1358,7 +1412,6 @@
 
     window.scrollTo({ top: 0, behavior: "auto" });
 
-    // ленивые загрузки по вкладкам
     if (id === "screen-home") loadTrainings();
     if (id === "screen-rating") loadRating(state.ratingLevel);
     if (id === "screen-notifications") loadNotifications();
@@ -1389,7 +1442,6 @@
 
       const div = document.createElement("div");
       div.className = "week-day" + (sameDay(d, state.selectedDate) ? " active" : "");
-      // ВАЖНО: тут именно дни недели (ПН/ВТ/...) + дата
       div.innerHTML = `<span>${ruWeekdayShort(d)}</span><span class="date">${d.getDate()}</span>`;
 
       div.addEventListener("click", () => {
@@ -1410,13 +1462,100 @@
     if (l.includes("средний+")) return "chip-level-red";
     if (l === "средний") return "chip-level-purple";
     if (l.includes("средний-")) return "chip-level-green";
-    // fallback
     return "chip-level-yellow";
   }
 
   function levelChip(level) {
     const cls = levelToClass(level);
     return `<span class="session-chip ${cls}">${level}</span>`;
+  }
+
+  // ========= Training normalization =========
+  function normalizeTrainingFromApi(x) {
+    const start = x.start_at || x.starts_at || x.startsAt || x.startAt || null;
+    const end = x.ends_at || x.endsAt || null;
+    const time = start ? formatTimeHHMM(start) : "—";
+
+    const duration = Number(x.duration_minutes || x.duration || 0) || 0;
+    const endDate = end ? new Date(end) : (start && duration ? addMinutes(start, duration) : null);
+    const timeRange = (start && endDate)
+      ? `${formatTimeHHMM(start)}–${pad2(endDate.getHours())}:${pad2(endDate.getMinutes())}`
+      : (start ? `${formatTimeHHMM(start)}–—` : "—");
+
+    let levels = [];
+    if (Array.isArray(x.levels) && x.levels.length) levels = x.levels;
+    else if (Array.isArray(x.allowed_levels) && x.allowed_levels.length) levels = x.allowed_levels;
+    else if (x.min_level_name || x.max_level_name) {
+      const a = x.min_level_name ? [x.min_level_name] : [];
+      const b = x.max_level_name && x.max_level_name !== x.min_level_name ? [x.max_level_name] : [];
+      levels = [...a, ...b];
+    }
+
+    const capacityMain = Number(x.capacity_main ?? x.capacity ?? 0) || 0;
+    const free = Number(x.free_places ?? x.free ?? 0);
+    const occupiedMain = Number(x.occupied_main ?? x.occupied ?? 0) || 0;
+    const freePlaces = Number.isFinite(free) ? free : Math.max(0, capacityMain - occupiedMain);
+    const occupied = Math.max(0, capacityMain - freePlaces);
+
+    const priceMin = Number(x.price_min ?? x.price ?? 0) || 0;
+    const finalPrice = Number(x.final_price ?? 0) || 0;
+
+    return {
+      id: x.id,
+      title: x.title || x.name || "Тренировка",
+      titleFull: x.title || x.name || "Тренировка",
+      description: x.description || "",
+      start_at: start,
+      time,
+      timeRange,
+      address: x.address || x.location_name || x.location || "Адрес не указан",
+      trainer: x.coach_name || x.trainer || "—",
+      levels,
+
+      capacity: capacityMain,
+      free: freePlaces,
+      occupied,
+
+      price: finalPrice || priceMin || 0,
+      price_min: priceMin || 0,
+      price_max: Number(x.price_max ?? 0) || 0,
+      price_tiers: Array.isArray(x.price_tiers) ? x.price_tiers : [],
+
+      can_enroll: (typeof x.can_enroll === "boolean") ? x.can_enroll : true,
+      can_cancel: (typeof x.can_cancel === "boolean") ? x.can_cancel : false,
+      user_enrollment_status: x.user_enrollment_status || "none",
+
+      image_url: x.image_url || null,
+      video_url: x.video_url || null,
+
+      // cancel hints
+      cancel_deadline_at: x.cancel_deadline_at || null,
+      is_late_cancel: !!x.is_late_cancel
+    };
+  }
+
+  // ========= Filters =========
+  function matchesTypeFilter(t) {
+    if (!state.filters.type.size) return true;
+    const title = (t.titleFull || "").toLowerCase();
+    for (const v of state.filters.type) {
+      const vv = String(v).toLowerCase();
+      if (title.includes(vv)) return true;
+    }
+    return false;
+  }
+
+  function matchesLevelFilter(t) {
+    if (!state.filters.level.size) return true;
+    const levels = (t.levels || []).map(x => String(x));
+    for (const v of state.filters.level) {
+      if (levels.includes(v)) return true;
+    }
+    return false;
+  }
+
+  function applyFilters(trainings) {
+    return trainings.filter(t => matchesTypeFilter(t) && matchesLevelFilter(t));
   }
 
   // ========= Render trainings =========
@@ -1434,22 +1573,33 @@
       card.className = "session-card";
       card.dataset.id = t.id;
 
+      if (t.image_url) {
+        // аккуратно: меняем только фон изображения
+        // (остальная верстка остается как была)
+        // eslint-disable-next-line
+      }
+
       const levels = (t.levels && t.levels.length) ? t.levels : [];
       const chips = levels.map(levelChip).join("");
 
-      const status = t.user_enrollment_status || "none";
+      const statusRaw = (t.user_enrollment_status || "none").toLowerCase();
+      const isEnrolled = (statusRaw && statusRaw !== "none" && !statusRaw.includes("cancel"));
+      const isReserve = statusRaw.includes("reserve") || statusRaw.includes("wait");
+
       let statusText = "";
       let statusCls = "muted";
-      if (status === "main" || status === "enrolled" || status === "booked") { statusText = "Вы записаны"; statusCls = "ok"; }
-      else if (status === "reserve" || status === "queued") { statusText = "Вы в резерве"; statusCls = "muted"; }
+      if (isEnrolled && !isReserve) { statusText = "Вы записаны"; statusCls = "ok"; }
+      else if (isEnrolled && isReserve) { statusText = "Вы в резерве"; statusCls = "muted"; }
       else if (t.can_enroll === false) { statusText = "Недоступно"; statusCls = "warn"; }
 
       const statusHtml = statusText
         ? `<div class="session-status-pill ${statusCls}">${statusText}</div>`
         : "";
 
+      const bg = t.image_url ? `style="background-image:url('${t.image_url}');"` : "";
+
       card.innerHTML = `
-        <div class="session-image">
+        <div class="session-image" ${bg}>
           <div class="session-time-pill">${safeText(t.time,"—")}</div>
           ${statusHtml}
           <div class="session-chip-row">${chips}</div>
@@ -1457,7 +1607,7 @@
         <div class="session-body">
           <div class="session-title-row">
             <div class="session-title">${safeText(t.title,"Тренировка")}</div>
-            <div class="session-trainer-pill">${t.with_coach ? "с тренером" : "без тренера"}</div>
+            <div class="session-trainer-pill">${t.trainer && t.trainer !== "—" ? "с тренером" : "без тренера"}</div>
           </div>
           <div class="session-location">${safeText(t.address,"Адрес не указан")}</div>
           <div class="session-footer">
@@ -1475,76 +1625,23 @@
     });
   }
 
-  function normalizeTrainingFromApi(x) {
-    const start = x.start_at || x.starts_at || x.startsAt || x.startAt || null;
-    const end = x.ends_at || x.endsAt || null;
-    const time = start ? formatTimeHHMM(start) : "—";
-
-    const duration = Number(x.duration_minutes || x.duration || 0) || 0;
-    const endDate = end ? new Date(end) : (start && duration ? addMinutes(start, duration) : null);
-    const timeRange = (start && endDate)
-      ? `${formatTimeHHMM(start)}–${pad2(endDate.getHours())}:${pad2(endDate.getMinutes())}`
-      : (start ? `${formatTimeHHMM(start)}–—` : "—");
-
-    // уровни допуска (пытаемся из разных полей)
-    let levels = [];
-    if (Array.isArray(x.levels) && x.levels.length) levels = x.levels;
-    else if (Array.isArray(x.allowed_levels) && x.allowed_levels.length) levels = x.allowed_levels;
-    else if (x.min_level_name || x.max_level_name) {
-      const a = x.min_level_name ? [x.min_level_name] : [];
-      const b = x.max_level_name && x.max_level_name !== x.min_level_name ? [x.max_level_name] : [];
-      levels = [...a, ...b];
-    }
-
-    const capacity = Number(x.capacity_main ?? x.capacity ?? 0) || 0;
-    const free = Number(x.free_places ?? x.free ?? 0);
-    const occupied = Number.isFinite(free) ? Math.max(0, capacity - free) : (Number(x.occupied_main ?? x.occupied ?? 0) || 0);
-
-    return {
-      id: x.id,
-      title: x.title || x.name || "Тренировка",
-      titleFull: x.title || x.name || "Тренировка",
-      start_at: start,
-      time,
-      timeRange,
-      address: x.address || x.location_name || x.location || "Адрес не указан",
-      trainer: x.coach_name || x.trainer || "—",
-      levels,
-      capacity,
-      free: Number.isFinite(free) ? free : Math.max(0, capacity - occupied),
-      occupied,
-      price: Number(x.price_min ?? x.price ?? 0) || 0,
-      can_enroll: (typeof x.can_enroll === "boolean") ? x.can_enroll : true,
-      user_enrollment_status: x.user_enrollment_status || "none",
-      with_coach: (typeof x.with_coach === "boolean") ? x.with_coach : (x.coach_name ? true : true),
-      image_url: x.image_url || null,
-      video_url: x.video_url || null
-    };
-  }
-
-  function buildTrainingsQuery() {
-    const params = new URLSearchParams();
-    params.set("date", toISODate(state.selectedDate));
-
-    // фильтры в запрос (как требует этап 12.2)
-    if (state.filters.type.size) params.set("type", Array.from(state.filters.type).join(","));
-    if (state.filters.level.size) params.set("level", Array.from(state.filters.level).join(","));
-
-    const q = params.toString();
-    return q ? `?${q}` : "";
-  }
-
   async function loadTrainings() {
     $("#home-subheading").textContent = formatHomeHeading(state.selectedDate, state.city);
 
     try {
-      const data = await apiFetch(API_ENDPOINTS.trainings + buildTrainingsQuery());
-      const items = data?.items || data?.result?.items || data || [];
-      state.trainings = Array.isArray(items) ? items.map(normalizeTrainingFromApi) : [];
+      const data = await apiFetch(`${API_ENDPOINTS.trainings}?limit=200&skip=0`);
+      const payload = unwrap(data);
+      const items = payload?.items || payload?.result?.items || payload || [];
+      const arr = Array.isArray(items) ? items.map(normalizeTrainingFromApi) : [];
+
+      // backend выдаёт список начиная с "сейчас" — фильтруем по выбранной дате на фронте
+      const byDate = arr.filter(t => sameLocalDate(t.start_at, state.selectedDate));
+
+      state.trainings = applyFilters(byDate);
     } catch (e) {
       state.trainings = [];
-      // если ошибка — показываем пусто красиво
     }
+
     renderTrainings();
   }
 
@@ -1554,38 +1651,75 @@
     row.innerHTML = (levels || []).map(levelChip).join("");
   }
 
+  function renderPriceTiers(t) {
+    const ul = $("#details-prices");
+    ul.innerHTML = "";
+
+    const tiers = Array.isArray(t.price_tiers) ? t.price_tiers : [];
+    if (!tiers.length) {
+      // оставим пусто — так и было в старом index
+      return;
+    }
+
+    tiers.forEach(pt => {
+      const li = document.createElement("li");
+      const title = safeText(pt.title || "Тариф", "Тариф");
+      const price = Number(pt.price ?? 0) || 0;
+      li.textContent = `${title}: ${price} ₽`;
+      ul.appendChild(li);
+    });
+  }
+
   function renderTrainingDetails(t) {
     state.currentTraining = t;
 
     if (t.image_url) $("#details-hero").style.backgroundImage = `url('${t.image_url}')`;
+
     $("#details-title").textContent = safeText(t.titleFull, "Тренировка");
     $("#details-time").textContent = safeText(t.time, "—");
-    $("#details-date").textContent = safeText(formatHomeHeading(new Date(t.start_at || state.selectedDate), ""), "—");
+
+    const d = t.start_at ? new Date(t.start_at) : state.selectedDate;
+    $("#details-date").textContent = safeText(formatHomeHeading(d, ""), "—");
+
     $("#details-time-range").textContent = safeText(t.timeRange, "—");
     $("#details-trainer").textContent = safeText(t.trainer, "—");
-    $("#details-price").textContent = t.price ? `${t.price} ₽` : "Стоимость уточняется";
+
+    $("#details-price").textContent = t.price ? `${t.price} ₽` : (t.price_min ? `от ${t.price_min} ₽` : "Стоимость уточняется");
     $("#details-address").textContent = safeText(t.address, "Адрес не указан");
-    $("#details-note").textContent = "Детали тренировки загружаются из расписания и/или бэка.";
+
+    // cancel hints
+    const deadline = t.cancel_deadline_at ? new Date(t.cancel_deadline_at) : null;
+    if (deadline && !Number.isNaN(deadline.getTime())) {
+      const hhmm = `${pad2(deadline.getHours())}:${pad2(deadline.getMinutes())}`;
+      $("#details-note").textContent = `Отмена без штрафа до ${hhmm}.`;
+    } else {
+      $("#details-note").textContent = "Детали тренировки загружаются из расписания и/или бэка.";
+    }
+
     $("#details-left").textContent = `Осталось ${t.free} мест`;
-    $("#details-min").textContent = safeText(t.min_places ? `${t.min_places} мест` : "—");
+    $("#details-min").textContent = "—";
     $("#details-max").textContent = t.capacity ? `${t.capacity} мест` : "—";
     $("#details-free").textContent = `${t.free} мест`;
     $("#details-hint").textContent = (t.free > 0) ? "Успей записаться!" : "Основной состав заполнен — можно в резерв (если включено).";
-    renderLevelChips(t.levels || []);
 
-    // Кнопки записи/отмены (этап 12.3)
+    renderLevelChips(t.levels || []);
+    renderPriceTiers(t);
+
     const enrollBtn = $("#btn-open-booking");
     const cancelBtn = $("#btn-cancel-enroll");
-    const status = t.user_enrollment_status || "none";
+
+    const statusRaw = (t.user_enrollment_status || "none").toLowerCase();
+    const isEnrolled = (statusRaw && statusRaw !== "none" && !statusRaw.includes("cancel"));
+    const isReserve = statusRaw.includes("reserve") || statusRaw.includes("wait");
 
     cancelBtn.style.display = "none";
     enrollBtn.disabled = false;
 
-    if (status === "main" || status === "enrolled" || status === "booked") {
+    if (isEnrolled && !isReserve) {
       enrollBtn.textContent = "Вы записаны";
       enrollBtn.disabled = true;
       cancelBtn.style.display = "block";
-    } else if (status === "reserve" || status === "queued") {
+    } else if (isEnrolled && isReserve) {
       enrollBtn.textContent = "Вы в резерве";
       enrollBtn.disabled = true;
       cancelBtn.style.display = "block";
@@ -1595,51 +1729,81 @@
       if (t.can_enroll === false) enrollBtn.textContent = "Недоступно";
     }
 
-    // календарь (если бэк отдаёт ссылку/файл — включим кнопку)
     $("#btn-add-calendar").style.display = "none";
-
     setActiveScreen("screen-session");
   }
 
   async function openTrainingDetails(id) {
-    // сначала берём из списка, чтобы экран открылся мгновенно
     const cached = state.trainings.find(x => String(x.id) === String(id));
     if (cached) renderTrainingDetails(cached);
 
-    // затем пробуем подтянуть детальнее
     try {
       const data = await apiFetch(API_ENDPOINTS.trainingById(id));
-      const item = data?.item || data?.result || data;
+      const payload = unwrap(data);
+      const item = payload?.item || payload;
       const full = item ? normalizeTrainingFromApi(item) : cached;
       if (full) renderTrainingDetails(full);
-    } catch(e) {
-      // оставляем cached
-    }
+    } catch(e) {}
   }
 
   // ========= Booking modal =========
   function openBookingModal() { $("#booking-modal").classList.add("active"); }
   function closeBookingModal() { $("#booking-modal").classList.remove("active"); }
 
+  async function ensureMe() {
+    // пробуем получить userId через /api/v1/me (middleware + initData)
+    if (state.userId) return;
+    const lsId = localStorage.getItem("APP_USER_ID");
+    if (lsId) { state.userId = Number(lsId) || null; return; }
+
+    try {
+      const data = await apiFetch(API_ENDPOINTS.me);
+      const payload = unwrap(data);
+      const uid = payload?.id;
+      if (uid) {
+        state.userId = uid;
+        localStorage.setItem("APP_USER_ID", String(uid));
+      }
+    } catch(e) {
+      // если нет Telegram initData / не задан BOT_TOKEN — userId может быть недоступен
+    }
+  }
+
   async function enrollCurrent() {
     const t = state.currentTraining;
     if (!t) return;
 
-    // Если у тебя другой эндпоинт — правь API_ENDPOINTS.enroll
-    await apiFetch(API_ENDPOINTS.enroll(t.id), { method: "POST" });
+    await apiFetch(API_ENDPOINTS.enrollments, {
+      method: "POST",
+      body: { training_id: t.id, is_paid: false }
+    });
 
-    // перезагрузим расписание и деталь
     await loadTrainings();
     const updated = state.trainings.find(x => String(x.id) === String(t.id)) || t;
     renderTrainingDetails(updated);
+  }
+
+  async function getMyEnrollmentId(trainingId) {
+    await ensureMe();
+    if (!state.userId) return null;
+
+    const data = await apiFetch(API_ENDPOINTS.roster(trainingId));
+    const payload = unwrap(data);
+    const items = Array.isArray(payload) ? payload : (payload?.items || payload || []);
+    if (!Array.isArray(items)) return null;
+
+    const mine = items.find(e => Number(e.user_id) === Number(state.userId) && !(String(e.status||"").toLowerCase().includes("cancel")));
+    return mine ? mine.id : null;
   }
 
   async function cancelEnrollCurrent() {
     const t = state.currentTraining;
     if (!t) return;
 
-    // Если у тебя другой эндпоинт — правь API_ENDPOINTS.enroll
-    await apiFetch(API_ENDPOINTS.enroll(t.id), { method: "DELETE" });
+    const enrollmentId = await getMyEnrollmentId(t.id);
+    if (!enrollmentId) throw new Error("Не удалось найти вашу запись на тренировку");
+
+    await apiFetch(API_ENDPOINTS.enrollmentCancel(enrollmentId), { method: "POST" });
 
     await loadTrainings();
     const updated = state.trainings.find(x => String(x.id) === String(t.id)) || t;
@@ -1659,18 +1823,24 @@
     players.forEach((p, index) => {
       const card = document.createElement("div");
       card.className = "player-card";
-      const avatarSeed = encodeURIComponent(p.username || p.name || ("player" + index));
+      const seed = encodeURIComponent(p.username || (p.first_name||"") + (p.last_name||"") || ("player" + index));
+      const name = safeText(
+        [p.first_name, p.last_name].filter(Boolean).join(" ").trim() || p.username,
+        "Игрок"
+      );
+      const cups = Number(p.cups ?? 0) || 0;
+
       card.innerHTML = `
-        <div class="player-place">${index + 1}</div>
-        <div class="player-avatar" style="background-image:url('https://api.dicebear.com/9.x/thumbs/svg?seed=${avatarSeed}');"></div>
+        <div class="player-place">${p.place || (index + 1)}</div>
+        <div class="player-avatar" style="background-image:url('https://api.dicebear.com/9.x/thumbs/svg?seed=${seed}');"></div>
         <div class="player-main">
-          <div class="player-name">${safeText(p.name || p.full_name || p.username, "Игрок")}</div>
+          <div class="player-name">${name}</div>
           <div class="player-score">
             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
               <path stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
                     d="M8 21l4-4 4 4M12 3v14"/>
             </svg>
-            <span>${Number(p.score ?? p.points ?? p.cups ?? 0) || 0}</span>
+            <span>${cups}</span>
           </div>
         </div>
       `;
@@ -1678,15 +1848,40 @@
     });
   }
 
-  async function loadRating(level) {
-    state.ratingLevel = level;
-    $("#rating-group-title").textContent = level;
+  async function loadLevels() {
+    try {
+      const data = await apiFetch(API_ENDPOINTS.levels);
+      const payload = unwrap(data);
+      const items = payload?.items || payload?.result?.items || [];
+      const map = {};
+      if (Array.isArray(items)) {
+        items.forEach(l => {
+          if (l && l.id != null) map[l.id] = l.name || String(l.id);
+        });
+      }
+      state.levelsById = map;
+    } catch (e) {
+      state.levelsById = {};
+    }
+  }
+
+  async function loadRating(levelName) {
+    state.ratingLevel = levelName;
+    $("#rating-group-title").textContent = levelName;
 
     try {
-      const q = `?level=${encodeURIComponent(level)}`;
-      const data = await apiFetch(API_ENDPOINTS.rating + q);
-      const items = data?.items || data?.result?.items || data || [];
-      renderRatingList(Array.isArray(items) ? items : []);
+      const data = await apiFetch(`${API_ENDPOINTS.ratings}?limit=200&offset=0`);
+      const payload = unwrap(data);
+      const items = payload?.items || payload?.result?.items || payload?.result?.items || payload?.result || payload?.items || [];
+      const arr = Array.isArray(items) ? items : [];
+
+      // фильтр по уровню — через /api/v1/levels (level_id -> name)
+      const filtered = arr.filter(u => {
+        const nm = state.levelsById[u.level_id];
+        return nm ? (nm === levelName) : true; // если нет маппинга — не режем
+      });
+
+      renderRatingList(filtered);
     } catch (e) {
       renderRatingList([]);
     }
@@ -1716,8 +1911,9 @@
 
   async function loadNotifications() {
     try {
-      const data = await apiFetch(API_ENDPOINTS.notifications);
-      const items = data?.items || data?.result?.items || data || [];
+      const data = await apiFetch(`${API_ENDPOINTS.notifications}?limit=100&offset=0`);
+      const payload = unwrap(data);
+      const items = payload?.items || payload?.result?.items || payload?.items || [];
       state.notifications = Array.isArray(items) ? items : [];
     } catch (e) {
       state.notifications = [];
@@ -1727,21 +1923,24 @@
 
   // ========= Profile =========
   function applyProfileToUI(p) {
-    const name = p?.full_name || p?.name || (tgUser ? `${tgUser.first_name || ""} ${tgUser.last_name || ""}`.trim() : "") || "Профиль";
-    const level = p?.level || p?.level_name || "—";
-    const username = p?.username || (tgUser?.username ? "@" + tgUser.username : "—");
+    const first = p?.first_name || tgUser?.first_name || "";
+    const last = p?.last_name || tgUser?.last_name || "";
+    const name = (first || last) ? `${first} ${last}`.trim() : (p?.username ? "@" + p.username : "Профиль");
+    const username = p?.username ? "@" + p.username : (tgUser?.username ? "@" + tgUser.username : "—");
+
+    const levelName = (p?.level_id != null && state.levelsById[p.level_id]) ? state.levelsById[p.level_id] : "—";
 
     $("#mini-name").textContent = name;
-    $("#mini-level").textContent = `Уровень: ${level}`;
+    $("#mini-level").textContent = `Уровень: ${levelName}`;
+
     $("#profile-name").textContent = name;
-    $("#profile-level").textContent = level;
+    $("#profile-level").textContent = levelName;
     $("#profile-username").textContent = username;
 
-    const score = Number(p?.score ?? p?.points ?? 0) || 0;
-    $("#mini-score").textContent = score;
+    const cups = Number(p?.cups ?? 0) || 0;
+    $("#mini-score").textContent = cups;
 
-    // аватар
-    const photo = p?.photo_url || tgUser?.photo_url || "";
+    const photo = tgUser?.photo_url || "";
     if (photo) {
       $("#mini-avatar").innerHTML = `<img src="${photo}" alt="avatar" />`;
       $("#profile-avatar").innerHTML = `<img src="${photo}" alt="avatar" />`;
@@ -1750,18 +1949,18 @@
       $("#profile-avatar").innerHTML = "";
     }
 
-    // контакты (если бэк отдаёт)
-    if (p?.contact_phone) $("#contact-phone").textContent = p.contact_phone;
-    if (p?.contact_tg) $("#contact-tg").textContent = p.contact_tg;
+    // контакты (в API может не быть — оставляем дефолт)
+    if (p?.phone) $("#contact-phone").textContent = p.phone;
+    if (username && username !== "—") $("#contact-tg").textContent = username;
   }
 
   async function loadProfile() {
+    // профиль: /api/v1/profile/me (middleware -> нужен X-Telegram-Init-Data и корректный BOT_TOKEN на бэке)
     try {
       const data = await apiFetch(API_ENDPOINTS.profile);
-      const item = data?.item || data?.result || data;
-      state.profile = item || null;
+      const payload = unwrap(data);
+      state.profile = payload || null;
     } catch (e) {
-      // fallback на телеграм-данные
       state.profile = state.profile || null;
     }
     applyProfileToUI(state.profile);
@@ -1770,10 +1969,13 @@
   function openProfileEditor() {
     const p = state.profile || {};
     $("#profile-form").style.display = "block";
-    $("#f-name").value = p.full_name || p.name || "";
+
+    const fio = [p.first_name, p.last_name].filter(Boolean).join(" ").trim();
+    $("#f-name").value = fio || "";
     $("#f-gender").value = p.gender || "";
-    $("#f-birthdate").value = (p.birthdate || p.birthday || "").slice(0,10);
+    $("#f-birthdate").value = (p.birth_date || "").toString().slice(0,10);
     $("#f-phone").value = p.phone || "";
+
     $("#profile-save-note").style.display = "none";
   }
 
@@ -1781,19 +1983,35 @@
     $("#profile-form").style.display = "none";
   }
 
+  function splitFio(fio) {
+    const parts = (fio || "").trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) return { first_name: null, last_name: null };
+    const first_name = parts[0] || null;
+    const last_name = parts.slice(1).join(" ") || null;
+    return { first_name, last_name };
+  }
+
   async function saveProfile() {
+    const fio = $("#f-name").value.trim();
+    const { first_name, last_name } = splitFio(fio);
+
     const payload = {
-      full_name: $("#f-name").value.trim(),
-      gender: $("#f-gender").value,
-      birthdate: $("#f-birthdate").value,
-      phone: $("#f-phone").value.trim()
+      first_name: first_name || undefined,
+      last_name: last_name || undefined,
+      gender: $("#f-gender").value || undefined,
+      birth_date: $("#f-birthdate").value || undefined,
+      phone: $("#f-phone").value.trim() || undefined
     };
+
+    // Удаляем undefined (иначе бек может ругаться на лишние поля/пустые значения)
+    Object.keys(payload).forEach(k => payload[k] === undefined && delete payload[k]);
 
     try {
       const data = await apiFetch(API_ENDPOINTS.profile, { method: "PATCH", body: payload });
-      const item = data?.item || data?.result || data;
-      state.profile = item || state.profile;
+      const updated = unwrap(data);
+      state.profile = updated || state.profile;
       applyProfileToUI(state.profile);
+
       $("#profile-save-note").style.display = "block";
       $("#profile-save-note").textContent = "Профиль сохранён";
       closeProfileEditor();
@@ -1803,7 +2021,7 @@
     }
   }
 
-  // ========= Filters =========
+  // ========= Filters UI =========
   function toggleCheckboxEl(cbEl, checked) {
     cbEl.classList.toggle("checked", checked);
     cbEl.textContent = checked ? "✓" : "";
@@ -1844,14 +2062,16 @@
   document.addEventListener("DOMContentLoaded", async () => {
     applyThemeFromStorage();
 
-    // Базовый текст сразу
     $("#home-subheading").textContent = formatHomeHeading(state.selectedDate, state.city);
 
-    // Авторизация (если есть отдельный эндпоинт)
-    await tryTelegramAuth();
+    // уровни нужны и для рейтинга, и для профиля
+    await loadLevels();
 
     // Week strip (дни недели сверху)
     buildWeekStrip();
+
+    // пробуем узнать userId (для отмены записи)
+    await ensureMe();
 
     // Первичная загрузка
     await loadTrainings();
@@ -1953,7 +2173,7 @@
       }
     });
 
-    // Address click -> maps (если есть ссылка)
+    // Address click -> maps
     $("#details-address").addEventListener("click", () => {
       const t = state.currentTraining;
       if (!t) return;
@@ -1968,15 +2188,16 @@
       if (e.target === e.currentTarget) closeBookingModal();
     });
 
-    // Fullscreen button (без ломания)
+    // Fullscreen button
     $("#btn-fullscreen").addEventListener("click", () => {
       try { tg?.expand(); } catch(e) {}
     });
 
     // Logout
     $("#logout-btn").addEventListener("click", () => {
-      localStorage.removeItem("access_token");
-      state.token = "";
+      localStorage.removeItem("APP_USER_ID");
+      localStorage.removeItem("X_USER_ID");
+      localStorage.removeItem("X_TG_ID");
       try { tg?.close(); } catch(e) { location.reload(); }
     });
 

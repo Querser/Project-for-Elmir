@@ -8,6 +8,21 @@ export function getTelegramWebApp() {
   return window.Telegram?.WebApp ?? null;
 }
 
+export function isInTelegram() {
+  const tg = getTelegramWebApp();
+  return Boolean(tg && (tg.initData || tg.initDataUnsafe));
+}
+
+export function getTelegramUser() {
+  const tg = getTelegramWebApp();
+  return tg?.initDataUnsafe?.user ?? null;
+}
+
+export function getTelegramUserId() {
+  const u = getTelegramUser();
+  return u?.id != null ? String(u.id) : "";
+}
+
 export function getTelegramInitData() {
   const tg = getTelegramWebApp();
   const initData = tg?.initData || "";
@@ -64,7 +79,7 @@ export function buildAuthHeaders() {
   if (initData) {
     headers["X-Telegram-Init-Data"] = initData;
 
-    // Иногда бэкенды любят отдельный хедер с telegram_id
+    // ВАЖНО: текущий бэкенд авторизует через X-Telegram-Id (core.deps.get_current_user)
     const tgId = initDataUnsafe?.user?.id;
     if (tgId) headers["X-Telegram-Id"] = String(tgId);
   } else {

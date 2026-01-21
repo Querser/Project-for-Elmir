@@ -1,6 +1,8 @@
-# backend/app/models/enrollment.py
+from __future__ import annotations
+
 from datetime import datetime
 import enum
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     Integer,
@@ -14,10 +16,16 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base
 
+if TYPE_CHECKING:
+    from .user import User
+    from .training import Training
+
 
 class EnrollmentStatus(str, enum.Enum):
     ACTIVE = "active"
+    RESERVE = "reserve"
     CANCELLED = "cancelled"
+    CANCELLED_LATE = "cancelled_late"
     NO_SHOW = "no_show"  # не пришёл
 
 
@@ -47,7 +55,7 @@ class Enrollment(Base):
     is_reserve: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     status: Mapped[EnrollmentStatus] = mapped_column(
-        Enum(EnrollmentStatus),
+        Enum(EnrollmentStatus, name="enrollmentstatus"),
         nullable=False,
         default=EnrollmentStatus.ACTIVE,
     )

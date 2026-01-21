@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Optional
@@ -8,6 +9,8 @@ from fastapi import Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+
+logger = logging.getLogger("app.exceptions")
 
 
 class ErrorCode(str, Enum):
@@ -19,7 +22,7 @@ class ErrorCode(str, Enum):
     NOT_FOUND = "not_found"
     CONFLICT = "conflict"
 
-    # domain (покрываем всё, что часто встречается в проекте)
+    # domain
     USER_NOT_FOUND = "user_not_found"
     TRAINING_NOT_FOUND = "training_not_found"
     TRAINING_CANCELLED = "training_cancelled"
@@ -43,9 +46,24 @@ def _code_to_str(code: Any) -> str:
     if isinstance(code, ErrorCode):
         return code.value
     if isinstance(code, Enum):
-        # на случай если где-то другой Enum
         return str(getattr(code, "value", str(code)))
     return str(code)
+
+
+def _http_status_to_error_code(status_code: int) -> str:
+    if status_code == 401:
+        return ErrorCode.UNAUTHORIZED.value
+    if status_code == 403:
+        return ErrorCode.FORBIDDEN.value
+    if status_code == 404:
+        return ErrorCode.NOT_FOUND.value
+    if status_code == 409:
+        return ErrorCode.CONFLICT.value
+    if status_code == 422:
+        return ErrorCode.VALIDATION_ERROR.value
+    if 400 <= status_code < 500:
+        return ErrorCode.CONFLICT.value
+    return ErrorCode.INTERNAL_ERROR.value
 
 
 @dataclass
@@ -110,8 +128,6 @@ class AppException(Exception):
 def setup_exception_handlers(app) -> None:
     """
     Регистрирует обработчики исключений в FastAPI приложении.
-    Импортируется из app.main как:
-        from app.core.exceptions import setup_exception_handlers
     """
 
     @app.exception_handler(AppException)
@@ -136,21 +152,31 @@ def setup_exception_handlers(app) -> None:
 
     @app.exception_handler(StarletteHTTPException)
     async def _http_exception_handler(request: Request, exc: StarletteHTTPException):
-        # чтобы HTTPException тоже был в едином формате
         status = int(getattr(exc, "status_code", 500) or 500)
         detail = getattr(exc, "detail", None)
+
+        # detail может быть str/dict/Any — приведём аккуратно
+        if isinstance(detail, str):
+            message = detail
+            details = None
+        else:
+            message = "HTTP error"
+            details = detail
+
         return JSONResponse(
             status_code=status,
             content={
                 "error": {
-                    "code": ErrorCode.CONFLICT.value if status == 409 else ErrorCode.INTERNAL_ERROR.value,
-                    "message": str(detail) if detail is not None else "HTTP error",
+                    "code": _http_status_to_error_code(status),
+                    "message": message,
+                    **({"details": details} if details is not None else {}),
                 }
             },
         )
 
     @app.exception_handler(Exception)
     async def _unhandled_handler(request: Request, exc: Exception):
+        logger.exception("Unhandled exception: %s %s", request.method, request.url.path)
         return JSONResponse(
             status_code=500,
             content={

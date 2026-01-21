@@ -59,11 +59,36 @@ def RESERVE_STATUS() -> Any:
 
 
 def _status_to_str(st: Any) -> str:
+    if st is None:
+        return ""
+    # SQLAlchemy Enum часто приходит как EnumMember, у которого есть .value
+    v = getattr(st, "value", st)
     try:
-        s = str(st)
+        s = str(v)
     except Exception:
         return ""
     return s.lower().strip()
+
+
+def _counts_for_training(db: Session, training_id: int) -> tuple[int, int]:
+    """
+    Возвращает (active_cnt, reserve_cnt) по факту из БД.
+    """
+    rows: Sequence[tuple[Any]] = (
+        db.query(Enrollment.status)
+        .filter(Enrollment.training_id == training_id)
+        .all()
+    )
+
+    active_cnt = 0
+    reserve_cnt = 0
+    for (st,) in rows:
+        if _is_active(st):
+            active_cnt += 1
+        elif _is_reserve(st):
+            reserve_cnt += 1
+    return active_cnt, reserve_cnt
+
 
 
 def _is_active(st: Any) -> bool:
@@ -201,23 +226,53 @@ def enroll_user_to_training(
         .filter(Enrollment.training_id == training_id, Enrollment.user_id == user_id)
         .first()
     )
+
+    # Если уже есть запись:
+    # - ACTIVE/RESERVE -> конфликт (уже записан)
+    # - CANCELLED/CANCELLED_LATE -> разрешаем "ре-запись" через ре-активацию той же строки
     if existing:
-        raise AppException.conflict(ErrorCode.ALREADY_ENROLLED, "User already enrolled")
+        st = getattr(existing, "status", None)
+        if _is_active(st) or _is_reserve(st):
+            raise AppException.conflict(ErrorCode.ALREADY_ENROLLED, "User already enrolled")
+        if not _is_cancelled(st):
+            # На всякий случай: если статус какой-то неизвестный, считаем что повтор нельзя
+            raise AppException.conflict(ErrorCode.ALREADY_ENROLLED, "User already enrolled")
 
     main_cap, reserve_cap = _training_capacity(training)
-    active_cnt = _active_enrollments_count(training)
+
+    active_cnt, reserve_cnt = _counts_for_training(db, training_id)
 
     status = ACTIVE_STATUS()
-    is_reserve = False
+    is_reserve_flag = False
 
+    # main заполнен -> reserve
     if main_cap and active_cnt >= main_cap:
-        # main заполнен -> reserve
-        if reserve_cap and active_cnt < (main_cap + reserve_cap):
+        if reserve_cap and reserve_cnt < reserve_cap:
             status = RESERVE_STATUS()
-            is_reserve = True
+            is_reserve_flag = True
         else:
             raise AppException.conflict(ErrorCode.TRAINING_FULL, "Training is full")
 
+    # Если была отменённая запись — обновляем её, а не создаём новую
+    if existing:
+        if hasattr(existing, "status"):
+            setattr(existing, "status", status)
+        if hasattr(existing, "is_paid"):
+            setattr(existing, "is_paid", bool(is_paid))
+        if hasattr(existing, "is_reserve"):
+            setattr(existing, "is_reserve", bool(is_reserve_flag))
+        if price_tier_id is not None and hasattr(existing, "price_tier_id"):
+            setattr(existing, "price_tier_id", int(price_tier_id))
+        # если есть cancelled_at — логично сбросить
+        if hasattr(existing, "cancelled_at"):
+            setattr(existing, "cancelled_at", None)
+
+        db.add(existing)
+        db.commit()
+        db.refresh(existing)
+        return existing
+
+    # Иначе создаём новую запись
     e = Enrollment(training_id=training_id, user_id=user_id)
 
     if hasattr(e, "status"):
@@ -225,7 +280,7 @@ def enroll_user_to_training(
     if hasattr(e, "is_paid"):
         setattr(e, "is_paid", bool(is_paid))
     if hasattr(e, "is_reserve"):
-        setattr(e, "is_reserve", bool(is_reserve))
+        setattr(e, "is_reserve", bool(is_reserve_flag))
     if price_tier_id is not None and hasattr(e, "price_tier_id"):
         setattr(e, "price_tier_id", int(price_tier_id))
 

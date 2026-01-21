@@ -14,9 +14,7 @@ if TYPE_CHECKING:
 class Location(Base):
     __tablename__ = "locations"
 
-    # ВАЖНО: мы маппим только id — это гарантированно есть в таблице.
-    # Остальные колонки (какие бы они ни были) SQLAlchemy не обязаны знать,
-    # и это не будет ломать запросы trainings.
+    # Маппим только id — безопасно даже если в таблице есть другие колонки
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
 
     trainings: Mapped[list["Training"]] = relationship(
