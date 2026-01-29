@@ -18,7 +18,7 @@ router = APIRouter(prefix="/enrollments", tags=["Enrollments"])
 
 def _unexpected_kwarg(err: TypeError, kw: str) -> bool:
     """
-    Не маскируем другие TypeError изнутри сервиса — ловим только несовпадение сигнатуры.
+    Ловим ТОЛЬКО несовпадение сигнатуры (unexpected keyword argument).
 
     Python формирует сообщение примерно так:
       - "enroll_user_to_training() got an unexpected keyword argument 'user'"
@@ -30,11 +30,11 @@ def _unexpected_kwarg(err: TypeError, kw: str) -> bool:
 def _call_enroll_service(db: Session, user: User, payload: EnrollmentCreateRequest):
     """
     Поддерживаем несколько возможных сигнатур сервиса:
-      1) enroll_user_to_training(db, user=..., training_id=..., ...)
-      2) enroll_user_to_training(db, user_id=..., training_id=..., ...)
+      1) enroll_user_to_training(db, user_id=..., training_id=..., ...)
+      2) enroll_user_to_training(db, user=..., training_id=..., ...)
       3) enroll_user_to_training(db, telegram_id=..., training_id=..., ...)
 
-    В текущей кодовой базе (судя по /app/app/services/enrollment_service.py) используется вариант (2).
+    В твоей кодовой базе чаще всего используется (1).
     """
     base_kwargs = {
         "training_id": payload.training_id,
@@ -42,18 +42,19 @@ def _call_enroll_service(db: Session, user: User, payload: EnrollmentCreateReque
         "is_paid": getattr(payload, "is_paid", False),
     }
 
-    # 1) user=...
+    # 1) user_id=... (наиболее вероятно/правильно для твоего проекта)
+    try:
+        return enroll_user_to_training(db, user_id=user.id, **base_kwargs)
+    except TypeError as e:
+        # если ошибка НЕ про keyword user_id — пробрасываем (это реальная ошибка внутри сервиса)
+        if not _unexpected_kwarg(e, "user_id"):
+            raise
+
+    # 2) user=...
     try:
         return enroll_user_to_training(db, user=user, **base_kwargs)
     except TypeError as e:
         if not _unexpected_kwarg(e, "user"):
-            raise
-
-    # 2) user_id=...  (АКТУАЛЬНО для твоего enrollment_service.py)
-    try:
-        return enroll_user_to_training(db, user_id=user.id, **base_kwargs)
-    except TypeError as e:
-        if not _unexpected_kwarg(e, "user_id"):
             raise
 
     # 3) telegram_id=... (если модель User реально содержит telegram_id)
@@ -68,49 +69,49 @@ def _call_enroll_service(db: Session, user: User, payload: EnrollmentCreateReque
     # Если дошли сюда — сигнатура сервиса другая (или переименованы аргументы)
     raise TypeError(
         "enroll_user_to_training: unsupported signature. "
-        "Expected one of: user= / user_id= / telegram_id= plus training_id."
+        "Expected one of: user_id= / user= / telegram_id= plus training_id."
     )
 
 
 def _call_cancel_service(db: Session, user: User, enrollment_id: int):
     """
     Поддерживаем несколько возможных сигнатур:
-      1) cancel_enrollment_for_user(db, user=..., enrollment_id=...)
-      2) cancel_enrollment_for_user(db, user_id=..., enrollment_id=...)
-      3) cancel_enrollment_for_user(db, telegram_id=..., enrollment_id=...)
-      4) те же варианты, но enrollment_id называется id
+      1) cancel_enrollment_for_user(db, user_id=..., enrollment_id=...)  (или id=...)
+      2) cancel_enrollment_for_user(db, user=..., enrollment_id=...)     (или id=...)
+      3) cancel_enrollment_for_user(db, telegram_id=..., enrollment_id=...) (или id=...)
 
-    В текущей кодовой базе чаще всего используется (2).
+    В твоей кодовой базе чаще всего используется (1).
     """
-    # 1) user=
-    try:
-        return cancel_enrollment_for_user(db, user=user, enrollment_id=enrollment_id)
-    except TypeError as e:
-        if _unexpected_kwarg(e, "enrollment_id"):
-            # попробуем id=
-            try:
-                return cancel_enrollment_for_user(db, user=user, id=enrollment_id)
-            except TypeError as e2:
-                # если это не про keyword — пробрасываем
-                if not (_unexpected_kwarg(e2, "user") or _unexpected_kwarg(e2, "id")):
-                    raise
-        elif not _unexpected_kwarg(e, "user"):
-            raise
 
-    # 2) user_id=
+    # 1) user_id=... (сначала enrollment_id=..., потом fallback id=...)
     try:
         return cancel_enrollment_for_user(db, user_id=user.id, enrollment_id=enrollment_id)
     except TypeError as e:
         if _unexpected_kwarg(e, "enrollment_id"):
+            # пробуем id=
             try:
                 return cancel_enrollment_for_user(db, user_id=user.id, id=enrollment_id)
             except TypeError as e2:
+                # если это НЕ про keyword — пробрасываем
                 if not (_unexpected_kwarg(e2, "user_id") or _unexpected_kwarg(e2, "id")):
                     raise
         elif not _unexpected_kwarg(e, "user_id"):
             raise
 
-    # 3) telegram_id=
+    # 2) user=... (сначала enrollment_id=..., потом fallback id=...)
+    try:
+        return cancel_enrollment_for_user(db, user=user, enrollment_id=enrollment_id)
+    except TypeError as e:
+        if _unexpected_kwarg(e, "enrollment_id"):
+            try:
+                return cancel_enrollment_for_user(db, user=user, id=enrollment_id)
+            except TypeError as e2:
+                if not (_unexpected_kwarg(e2, "user") or _unexpected_kwarg(e2, "id")):
+                    raise
+        elif not _unexpected_kwarg(e, "user"):
+            raise
+
+    # 3) telegram_id=... (если доступен)
     telegram_id = getattr(user, "telegram_id", None)
     if telegram_id is not None:
         try:
@@ -127,7 +128,7 @@ def _call_cancel_service(db: Session, user: User, enrollment_id: int):
 
     raise TypeError(
         "cancel_enrollment_for_user: unsupported signature. "
-        "Expected one of: user= / user_id= / telegram_id= plus enrollment_id (or id)."
+        "Expected one of: user_id= / user= / telegram_id= plus enrollment_id (or id)."
     )
 
 

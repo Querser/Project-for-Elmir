@@ -15,7 +15,7 @@ from app.api.v1 import (
 )
 from app.api.v1.location import router as locations_router
 
-api_router = APIRouter()
+api_router = APIRouter()  # <-- БЕЗ prefix="/api/v1"
 
 # public/user
 api_router.include_router(system.router)

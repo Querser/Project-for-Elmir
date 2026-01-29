@@ -1,191 +1,139 @@
 // src/api.js
-import { buildAuthHeaders, getTelegramInitData, setAuthToken } from "./auth";
+// Унифицированный слой API:
+// - добавляет Telegram WebApp initData (prod) или dev-заголовки (dev)
+// - умеет разворачивать ответы формата { ok: true, result: ... }
+// - нормализует ошибки backend (detail / error / message)
 
-/**
- * Можно задать в .env:
- * VITE_API_BASE_URL=http://localhost:8001
- *
- * Если пусто — используем относительные URL (удобно для одного домена).
- */
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
+import { buildAuthHeaders } from './auth';
 
-/**
- * Опциональная авторизация: пробуем отправить initData в backend.
- * Если endpoint не существует — просто игнорируем (чтобы не ломать то, что работает).
- */
-const AUTH_ENDPOINT_CANDIDATES = [
-  "/api/v1/auth/telegram",
-  "/api/v1/auth/webapp",
-  "/api/v1/telegram/auth",
-];
+// По умолчанию работаем от того же origin, что и миниапп (nginx проксирует /api/ -> backend)
+// Можно переопределить через VITE_API_BASE (например, при локальной разработке без nginx).
+export const API_BASE = (import.meta.env.VITE_API_BASE ?? '').toString().trim();
 
-function joinUrl(path) {
-  if (!API_BASE) return path;
-  return API_BASE.replace(/\/$/, "") + path;
+function buildUrl(path) {
+  if (!path) return API_BASE || '';
+  if (/^https?:\/\//i.test(path)) return path;
+
+  const base = (API_BASE || '').replace(/\/+$/, '');
+  const p = path.replace(/^\/+/, '');
+  if (!base) return `/${p}`;
+  return `${base}/${p}`;
 }
 
-function unwrap(res) {
+function tryJsonParse(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeErrorPayload(payload) {
+  if (!payload) return 'Неизвестная ошибка';
+
+  // FastAPI: { detail: '...' } или { detail: { error: { message } } }
+  if (typeof payload.detail === 'string') return payload.detail;
+  if (payload.detail && typeof payload.detail === 'object') {
+    const d = payload.detail;
+    if (typeof d.message === 'string') return d.message;
+    if (d.error && typeof d.error.message === 'string') return d.error.message;
+    if (Array.isArray(d)) return 'Ошибка валидации данных';
+  }
+
+  // Кастомный формат: { error: { message } }
+  if (payload.error && typeof payload.error.message === 'string') return payload.error.message;
+
+  if (typeof payload.message === 'string') return payload.message;
+
+  return 'Неизвестная ошибка';
+}
+
+/**
+ * Разворачивает success_response:
+ *   { ok: true, result: ... } -> ...
+ */
+export function unwrap(res) {
   if (!res) return res;
-  if (res.ok === true && res.result != null) return res.result;
+  if (res.ok === true && Object.prototype.hasOwnProperty.call(res, 'result')) return res.result;
   return res;
 }
 
 /**
- * Безопасно достаём items из разных форматов ответа
+ * Универсально достаёт items для списков.
  */
 export function extractItems(res) {
-  const u = unwrap(res);
-  if (!u) return [];
-  if (Array.isArray(u)) return u;
-  if (Array.isArray(u.items)) return u.items;
-  if (u.result && Array.isArray(u.result.items)) return u.result.items;
+  const data = unwrap(res);
+  if (!data) return [];
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data.items)) return data.items;
+  if (Array.isArray(data.results)) return data.results;
   return [];
 }
 
-async function parseResponse(resp) {
-  const ct = resp.headers.get("content-type") || "";
-  if (ct.includes("application/json")) {
-    return await resp.json();
-  }
-  // calendar/ics или что-то бинарное
-  return await resp.blob();
-}
+async function request(path, options = {}) {
+  const url = buildUrl(path);
+  const method = (options.method || 'GET').toUpperCase();
+  const headers = new Headers(options.headers || {});
 
-async function apiFetch(path, options = {}) {
-  const url = joinUrl(path);
+  // auth headers (Telegram initData or dev headers)
+  const auth = buildAuthHeaders();
+  Object.entries(auth || {}).forEach(([k, v]) => {
+    if (v == null || v === '') return;
+    if (!headers.has(k)) headers.set(k, String(v));
+  });
 
-  const headers = {
-    Accept: "application/json",
-    ...(options.headers || {}),
-    ...buildAuthHeaders(),
-  };
-
-  // Если body = объект, сериализуем
   let body = options.body;
-  if (
-    body &&
-    typeof body === "object" &&
-    !(body instanceof FormData) &&
-    !(body instanceof Blob)
-  ) {
-    headers["Content-Type"] = "application/json";
+  const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
+  const isBlob = typeof Blob !== 'undefined' && body instanceof Blob;
+
+  // Если body — объект, отправляем как JSON
+  if (body != null && typeof body === 'object' && !isFormData && !isBlob && !(body instanceof ArrayBuffer)) {
+    if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
     body = JSON.stringify(body);
   }
 
-  const resp = await fetch(url, {
-    ...options,
+  const res = await fetch(url, {
+    method,
     headers,
-    body,
+    body: method === 'GET' || method === 'HEAD' ? undefined : body,
   });
 
-  // 204
-  if (resp.status === 204) return null;
+  const ct = res.headers.get('content-type') || '';
+  const raw = await res.text();
+  const json = ct.includes('application/json') ? (tryJsonParse(raw) ?? {}) : null;
 
-  const data = await parseResponse(resp);
-
-  if (!resp.ok) {
-    let message = "Ошибка запроса";
-    if (data && typeof data === "object") {
-      if (data.detail) message = String(data.detail);
-      if (data.error?.message) message = String(data.error.message);
-      if (data.message) message = String(data.message);
-    }
-    const err = new Error(message);
-    err.status = resp.status;
-    err.data = data;
+  if (!res.ok) {
+    const msg = json ? normalizeErrorPayload(json) : (raw || `HTTP ${res.status}`);
+    const err = new Error(msg || `HTTP ${res.status}`);
+    err.status = res.status;
+    err.payload = json || raw;
     throw err;
   }
 
-  return data;
+  if (res.status === 204) return null;
+
+  const data = json != null ? json : raw;
+  return unwrap(data);
 }
 
-export async function apiGet(path) {
-  return await apiFetch(path, { method: "GET" });
+// === Public API ===
+
+export async function apiFetch(path, options = {}) {
+  return request(path, options);
 }
 
-export async function apiPost(path, body) {
-  return await apiFetch(path, { method: "POST", body });
+export function apiGet(path, headers) {
+  return request(path, { method: 'GET', headers });
 }
 
-export async function apiPatch(path, body) {
-  return await apiFetch(path, { method: "PATCH", body });
+export function apiPost(path, body, headers) {
+  return request(path, { method: 'POST', body, headers });
 }
 
-export async function apiPut(path, body) {
-  return await apiFetch(path, { method: "PUT", body });
+export function apiPatch(path, body, headers) {
+  return request(path, { method: 'PATCH', body, headers });
 }
 
-export async function apiDelete(path) {
-  return await apiFetch(path, { method: "DELETE" });
-}
-
-/**
- * Инициализация Mini App:
- * - Telegram WebApp ready/expand
- * - (опционально) отправляем initData на backend и сохраняем token, если вернулся
- */
-export async function initMiniAppAuth() {
-  const tg = window.Telegram?.WebApp;
-  tg?.ready?.();
-  tg?.expand?.();
-
-  const { initData } = getTelegramInitData();
-  if (!initData) return;
-
-  for (const ep of AUTH_ENDPOINT_CANDIDATES) {
-    try {
-      const res = await apiPost(ep, { init_data: initData });
-      const u = unwrap(res);
-      const token = u?.token || u?.access_token || null;
-      if (token) setAuthToken(token);
-      return;
-    } catch {
-      // endpoint может не существовать — это нормально, пробуем следующий
-    }
-  }
-}
-
-/**
- * Получить календарь:
- * - если backend отдаёт blob (ics) — откроем его
- * - если отдаёт {url} — откроем url
- */
-export async function openCalendar(trainingId) {
-  const path = `/api/v1/trainings/${trainingId}/calendar`;
-  const url = joinUrl(path);
-
-  const resp = await fetch(url, {
-    method: "GET",
-    headers: {
-      Accept: "*/*",
-      ...buildAuthHeaders(),
-    },
-  });
-
-  if (!resp.ok) {
-    const ct = resp.headers.get("content-type") || "";
-    let msg = `Ошибка календаря (${resp.status})`;
-    if (ct.includes("application/json")) {
-      const j = await resp.json().catch(() => null);
-      msg = j?.error?.message || j?.detail || msg;
-    }
-    throw new Error(msg);
-  }
-
-  const ct = resp.headers.get("content-type") || "";
-  if (ct.includes("application/json")) {
-    const j = await resp.json();
-    const u = unwrap(j);
-    const link = u?.url || u?.link;
-    if (link) {
-      window.open(link, "_blank", "noopener,noreferrer");
-      return;
-    }
-    throw new Error("Backend не вернул ссылку на календарь.");
-  }
-
-  const blob = await resp.blob();
-  const blobUrl = URL.createObjectURL(blob);
-  window.open(blobUrl, "_blank", "noopener,noreferrer");
-  setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+export function apiDelete(path, headers) {
+  return request(path, { method: 'DELETE', headers });
 }

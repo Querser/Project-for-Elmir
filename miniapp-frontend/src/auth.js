@@ -30,46 +30,70 @@ export function getTelegramInitData() {
   return { initData, initDataUnsafe };
 }
 
+function lsSet(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // ignore
+  }
+}
+
+function lsGet(key) {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function lsRemove(key) {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    // ignore
+  }
+}
+
 export function setDevAuth({ telegramId, userId }) {
   if (telegramId != null && String(telegramId).trim() !== "") {
-    localStorage.setItem(LS_DEV_TELEGRAM_ID, String(telegramId).trim());
+    lsSet(LS_DEV_TELEGRAM_ID, String(telegramId).trim());
   } else {
-    localStorage.removeItem(LS_DEV_TELEGRAM_ID);
+    lsRemove(LS_DEV_TELEGRAM_ID);
   }
 
   if (userId != null && String(userId).trim() !== "") {
-    localStorage.setItem(LS_DEV_USER_ID, String(userId).trim());
+    lsSet(LS_DEV_USER_ID, String(userId).trim());
   } else {
-    localStorage.removeItem(LS_DEV_USER_ID);
+    lsRemove(LS_DEV_USER_ID);
   }
 }
 
 export function getDevAuth() {
   return {
-    telegramId: localStorage.getItem(LS_DEV_TELEGRAM_ID) || "",
-    userId: localStorage.getItem(LS_DEV_USER_ID) || "",
+    telegramId: lsGet(LS_DEV_TELEGRAM_ID) || "",
+    userId: lsGet(LS_DEV_USER_ID) || "",
   };
 }
 
 export function clearAuth() {
-  localStorage.removeItem(LS_DEV_TELEGRAM_ID);
-  localStorage.removeItem(LS_DEV_USER_ID);
-  localStorage.removeItem(LS_AUTH_TOKEN);
+  lsRemove(LS_DEV_TELEGRAM_ID);
+  lsRemove(LS_DEV_USER_ID);
+  lsRemove(LS_AUTH_TOKEN);
 }
 
 export function setAuthToken(token) {
-  if (token) localStorage.setItem(LS_AUTH_TOKEN, token);
-  else localStorage.removeItem(LS_AUTH_TOKEN);
+  if (token) lsSet(LS_AUTH_TOKEN, token);
+  else lsRemove(LS_AUTH_TOKEN);
 }
 
 export function getAuthToken() {
-  return localStorage.getItem(LS_AUTH_TOKEN) || "";
+  return lsGet(LS_AUTH_TOKEN) || "";
 }
 
 /**
  * Заголовки авторизации:
- * - В Telegram: X-Telegram-Init-Data
- * - В браузере (dev): X-Telegram-Id или X-User-Id
+ * - В Telegram: X-Telegram-Init-Data (+ дублируем X-Telegram-Id из initDataUnsafe.user.id)
+ * - В браузере (dev): X-Telegram-Id или X-User-Id из localStorage
  * - Если backend вернёт токен (опционально) — добавим Authorization
  */
 export function buildAuthHeaders() {
@@ -92,4 +116,50 @@ export function buildAuthHeaders() {
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
   return headers;
+}
+
+/**
+ * =========================
+ * Совместимость со старым App.jsx
+ * =========================
+ * В логах сборки видно:
+ *   import { initTelegramAuth, getTelegramId } from './auth'
+ * Поэтому добавляем эти экспорты как алиасы, НЕ ломая текущую архитектуру.
+ */
+
+/**
+ * getTelegramId():
+ * - в Telegram вернёт tg user id
+ * - в браузере вернёт dev telegram id (если задан)
+ */
+export function getTelegramId() {
+  const tgId = getTelegramUserId();
+  if (tgId) return tgId;
+
+  const dev = getDevAuth();
+  return dev.telegramId || "";
+}
+
+/**
+ * initTelegramAuth():
+ * Мягкая инициализация Telegram WebApp (ready/expand).
+ * Ничего не “ломает”, даже если не в Telegram.
+ */
+export async function initTelegramAuth() {
+  const tg = getTelegramWebApp();
+  try {
+    tg?.ready?.();
+    tg?.expand?.();
+  } catch {
+    // ignore
+  }
+
+  // Возвращаем полезные данные (если App.jsx их использует — ок; если нет — тоже ок)
+  const { initData, initDataUnsafe } = getTelegramInitData();
+  return {
+    telegramId: getTelegramId(),
+    initData,
+    initDataUnsafe,
+    user: initDataUnsafe?.user ?? null,
+  };
 }

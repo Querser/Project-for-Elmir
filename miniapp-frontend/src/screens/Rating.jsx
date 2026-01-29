@@ -1,75 +1,303 @@
-// src/screens/Rating.jsx
-import { useEffect, useState } from "react";
-import { apiGet, extractItems } from "../api";
+import React, { useEffect, useMemo, useState } from "react";
+import { apiFetch, extractItems } from "../api";
 
-const LEVEL_HINTS = {
-  "Beginner": "Новичок: базовые навыки, простые упражнения",
-  "Intermediate": "Средний: стабильная техника, больше игры",
-  "Advanced": "Продвинутый: высокая динамика и сложные задания",
-};
+// Уровни строго по ТЗ
+const LEVEL_TABS = [
+  { key: "novice", label: "Новичок", emoji: "🥉" },
+  { key: "mid_minus", label: "Средний-", emoji: "🥈" },
+  { key: "mid", label: "Средний", emoji: "🥇", hasHint: true },
+  { key: "mid_plus", label: "Средний+", emoji: "🏆", hasHint: true },
+];
 
-export default function Rating({ onOpenUser }) {
-  const [items, setItems] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+function normalizeStr(v) {
+  if (v === null || v === undefined) return "";
+  return String(v).trim();
+}
 
-  async function load() {
-    setLoading(true);
-    setError("");
-    try {
-      const res = await apiGet("/api/v1/ratings?limit=200&offset=0");
-      setItems(extractItems(res));
-    } catch (e) {
-      console.error(e);
-      setItems([]);
-      setError("Не удалось загрузить рейтинг (проверь /api/v1/ratings).");
-    } finally {
-      setLoading(false);
-    }
+// Маппинг на случай, если в БД старые названия
+function normalizeLevelToKey(nameRaw) {
+  const n = normalizeStr(nameRaw).toLowerCase().replace(/\s+/g, "");
+  if (!n) return "mid";
+
+  // новые
+  if (n.includes("нович")) return "novice";
+  if (n.includes("средний-") || n.includes("средний−")) return "mid_minus";
+  if (n === "средний") return "mid";
+  if (n.includes("средний+")) return "mid_plus";
+
+  // старые (примерные)
+  if (n.includes("лайтпро") || n.includes("lightpro") || n.includes("pro")) return "mid_plus";
+  if (n.includes("лайт+") || n.includes("light+")) return "mid";
+  if (n.includes("лайт") || n.includes("light")) return "mid_minus";
+  if (n.includes("медиум") || n.includes("medium")) return "mid_plus";
+
+  return "mid";
+}
+
+function pickPlayerName(p) {
+  const fn = normalizeStr(p?.first_name ?? p?.firstName ?? "");
+  const ln = normalizeStr(p?.last_name ?? p?.lastName ?? "");
+  const full = `${fn} ${ln}`.trim();
+  if (full) return full;
+  return normalizeStr(p?.username ?? p?.tg_username ?? p?.login ?? "Игрок");
+}
+
+function pickAvatarLetter(name) {
+  const s = normalizeStr(name);
+  return s ? s[0].toUpperCase() : "•";
+}
+
+function pickScore(item) {
+  return (
+    item?.points ??
+    item?.score ??
+    item?.rating_points ??
+    item?.rating ??
+    item?.value ??
+    0
+  );
+}
+
+function pickLevelNameFromItem(item, levelsById) {
+  const id = item?.level_id ?? item?.levelId ?? item?.player_level_id ?? null;
+  if (id !== null && id !== undefined) {
+    const fromMap = levelsById.get(Number(id));
+    if (fromMap) return fromMap;
   }
+  const direct =
+    item?.level_name ??
+    item?.levelName ??
+    item?.level ??
+    item?.player_level ??
+    item?.player_level_name ??
+    null;
+
+  return normalizeStr(direct);
+}
+
+export default function Rating({ onOpenPlayer }) {
+  const [activeTab, setActiveTab] = useState("novice");
+  const [loading, setLoading] = useState(true);
+  const [errorText, setErrorText] = useState("");
+
+  const [levelsById, setLevelsById] = useState(new Map());
+  const [ratings, setRatings] = useState([]);
+  const [me, setMe] = useState(null);
+
+  const [hintTabKey, setHintTabKey] = useState(null);
 
   useEffect(() => {
+    let alive = true;
+
+    async function load() {
+      setLoading(true);
+      setErrorText("");
+
+      try {
+        const levelsRes = await apiFetch(`/api/v1/levels`);
+        const levels = extractItems(levelsRes) || [];
+        const map = new Map();
+        for (const l of levels) {
+          const id = l?.id ?? l?.level_id ?? null;
+          const name = normalizeStr(l?.name ?? l?.title ?? "");
+          if (id !== null) map.set(Number(id), name);
+        }
+
+        const rRes = await apiFetch(`/api/v1/ratings?limit=200&offset=0`);
+        const rItems = extractItems(rRes) || [];
+
+        const meRes = await apiFetch(`/api/v1/ratings/me`);
+        const meObj = meRes?.item ?? meRes ?? null;
+
+        if (!alive) return;
+        setLevelsById(map);
+        setRatings(rItems);
+        setMe(meObj);
+      } catch (e) {
+        if (!alive) return;
+        setErrorText(e?.message || "Ошибка загрузки рейтинга");
+      } finally {
+        if (alive) setLoading(false);
+      }
+
+    }
+
     load();
+
+    return () => {
+      alive = false;
+    };
   }, []);
 
+  const prepared = useMemo(() => {
+    const items = ratings.map((it, idx) => {
+      const player =
+        it?.player ?? it?.user ?? it?.profile ?? it ?? {}; // максимально мягко
+      const name = pickPlayerName(player);
+      const score = pickScore(it);
+      const levelName = pickLevelNameFromItem(it, levelsById) || pickLevelNameFromItem(player, levelsById);
+      const levelKey = normalizeLevelToKey(levelName);
+
+      return {
+        raw: it,
+        player,
+        id: player?.id ?? it?.player_id ?? it?.user_id ?? it?.id ?? idx,
+        name,
+        avatarLetter: pickAvatarLetter(name),
+        score: Number(score) || 0,
+        levelKey,
+      };
+    });
+
+    // сортируем по score desc
+    items.sort((a, b) => b.score - a.score);
+
+    // добавляем place (после сортировки)
+    return items.map((x, i) => ({ ...x, place: i + 1 }));
+  }, [ratings, levelsById]);
+
+  const filtered = useMemo(() => {
+    return prepared.filter((p) => p.levelKey === activeTab);
+  }, [prepared, activeTab]);
+
+  const meView = useMemo(() => {
+    if (!me) return null;
+    const score = pickScore(me);
+    const levelName = pickLevelNameFromItem(me, levelsById);
+    const levelKey = normalizeLevelToKey(levelName);
+    const tabLabel = LEVEL_TABS.find((t) => t.key === levelKey)?.label || "—";
+
+    return {
+      score: Number(score) || 0,
+      levelLabel: tabLabel,
+    };
+  }, [me, levelsById]);
+
+  const hintText = useMemo(() => {
+    if (!hintTabKey) return "";
+    if (hintTabKey === "mid") {
+      return "Средний: игроки с устойчивым уровнем игры, стабильно держат приём/подачу, понимают базовые взаимодействия.";
+    }
+    if (hintTabKey === "mid_plus") {
+      return "Средний+: более высокий темп, уверенная техника и принятие решений. Чаще играют на результат, меньше ошибок.";
+    }
+    return "";
+  }, [hintTabKey]);
+
   return (
-    <section className="screen">
-      <div className="screen-actions">
-        <button className="btn" onClick={load}>Обновить</button>
+    <div className="screen active">
+      <div className="topbar">
+        <h1 className="topbar-title">Рейтинг</h1>
+        <div style={{ width: 40 }} />
       </div>
 
-      {loading ? (
-        <div className="empty">Загрузка...</div>
-      ) : error ? (
-        <div className="empty">{error}</div>
-      ) : items.length === 0 ? (
-        <div className="empty">Рейтинг пуст</div>
-      ) : (
-        items.map((p, idx) => {
-          const place = p.place ?? idx + 1;
-          const levelName = p.level_name ?? p.level_title ?? "—";
-          const hint = LEVEL_HINTS[levelName] || "";
-          return (
-            <button
-              className="card card-button"
-              key={p.user_id ?? p.id ?? idx}
-              onClick={() => onOpenUser?.(p.user_id)}
+      <div className="rating-tabs">
+        {LEVEL_TABS.map((t) => (
+          <div
+            key={t.key}
+            className={`rating-tab ${t.key === activeTab ? "active" : ""}`}
+            onClick={() => setActiveTab(t.key)}
+            role="button"
+            tabIndex={0}
+          >
+            <div className="rating-tab-icon">
+              <span style={{ fontSize: 16 }}>{t.emoji}</span>
+            </div>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <span>{t.label}</span>
+              {t.hasHint ? (
+                <button
+                  className="linklike"
+                  style={{ fontSize: 12, fontWeight: 900 }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setHintTabKey(t.key);
+                  }}
+                  title="Подробнее"
+                >
+                  ?
+                </button>
+              ) : null}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {loading ? <div className="loader">Загрузка…</div> : null}
+
+      {!loading && errorText ? (
+        <div className="empty-state">
+          <span className="empty-ico">⚠️</span>
+          Ошибка
+          <div style={{ marginTop: 6 }}>{errorText}</div>
+        </div>
+      ) : null}
+
+      {!loading && !errorText && meView ? (
+        <div className="details-card">
+          <div className="label-row">
+            <span className="label-muted">Мой уровень</span>
+            <span className="label-strong">{meView.levelLabel}</span>
+          </div>
+          <div className="label-row" style={{ marginBottom: 0 }}>
+            <span className="label-muted">Мои очки</span>
+            <span className="label-strong" style={{ color: "var(--primary)" }}>
+              {meView.score}
+            </span>
+          </div>
+        </div>
+      ) : null}
+
+      {!loading && !errorText && filtered.length === 0 ? (
+        <div className="empty-state">
+          <span className="empty-ico">🏐</span>
+          В этом разделе пока нет игроков
+        </div>
+      ) : null}
+
+      {!loading && !errorText && filtered.length > 0 ? (
+        <div className="content">
+          {filtered.map((p) => (
+            <div
+              key={p.id}
+              className="player-card"
+              role="button"
+              tabIndex={0}
+              onClick={() => onOpenPlayer?.(p.id)}
             >
-              <div className="card-title">
-                {place}. {p.first_name || ""} {p.last_name || ""}{" "}
-                {p.username ? `(@${p.username})` : ""}
+              <div className="player-place">{p.place}</div>
+              <div className="player-avatar">{p.avatarLetter}</div>
+              <div className="player-main">
+                <div className="player-name">{p.name}</div>
+                <div className="player-score">
+                  <svg viewBox="0 0 24 24">
+                    <path
+                      d="M12 3l2.5 6.5L21 10l-5 4 1.5 7L12 18l-5.5 3 1.5-7-5-4 6.5-.5L12 3z"
+                      strokeWidth="2"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                  {p.score}
+                </div>
               </div>
-              <div className="muted">
-                Очки: {p.rating ?? p.avg_score ?? "—"} • Кубки: {p.cups ?? "—"}
-              </div>
-              <div className="muted" title={hint}>
-                Уровень: {levelName}
-                {hint ? " (наведи)" : ""}
-              </div>
-            </button>
-          );
-        })
-      )}
-    </section>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {hintTabKey ? (
+        <div className="modal-backdrop" onClick={() => setHintTabKey(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-title">Подробнее</div>
+            <div className="modal-text">{hintText}</div>
+            <div className="modal-actions">
+              <button className="primary-btn" onClick={() => setHintTabKey(null)}>
+                Понятно
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }

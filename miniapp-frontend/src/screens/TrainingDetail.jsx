@@ -1,247 +1,422 @@
-// src/screens/TrainingDetail.jsx
-import { useEffect, useState } from "react";
-import { apiDelete, apiGet, apiPost, openCalendar } from "../api";
+import { useEffect, useMemo, useState } from 'react';
+import { apiFetch } from '../api';
 
-function toRuDateTime(dt) {
-  if (!dt) return "—";
-  try {
-    return new Date(dt).toLocaleString("ru-RU");
-  } catch {
-    return String(dt);
-  }
+function parseDate(value) {
+  if (!value) return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
 }
 
-function getErrorText(e) {
-  const msg = e?.message || "Ошибка";
-  const backendMsg = e?.data?.error?.message || e?.data?.detail;
-  return backendMsg || msg;
+function formatTime(dt) {
+  if (!dt) return '';
+  return dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
 }
 
-/**
- * ВАЖНО:
- * Компонент рендерит только "контент" (карточки), без собственного topbar/tabbar,
- * чтобы внешний вид оставался как в твоём исходном App.jsx.
- */
-export default function TrainingDetail({ trainingId, onChanged }) {
-  const [t, setT] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+function formatDate(dt) {
+  if (!dt) return '';
+  return dt.toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric', month: 'long' });
+}
 
-  async function load() {
-    setLoading(true);
-    setError("");
+function toNumber(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function normalizeLocationLabel(loc) {
+  return (loc?.name ?? loc?.title ?? loc?.address ?? '').toString().trim();
+}
+
+function parseTierPeople(title) {
+  if (!title) return null;
+  const m = String(title).match(/(\d{1,2})/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isFinite(n) ? n : null;
+}
+
+function buildLevelChips(t) {
+  const minLv = (t?.min_level_name ?? '').toString().trim();
+  const maxLv = (t?.max_level_name ?? '').toString().trim();
+  return [minLv, maxLv].filter(Boolean);
+}
+
+export default function TrainingDetail({ trainingId, onBack, onChanged }) {
+  const [training, setTraining] = useState(null);
+  const [locationLabel, setLocationLabel] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const [bookingOpen, setBookingOpen] = useState(false);
+  const [cancelOpen, setCancelOpen] = useState(false);
+
+  const load = async () => {
+    if (!trainingId) return;
+
     try {
-      const res = await apiGet(`/api/v1/trainings/${trainingId}`);
-      const tt = res?.result ? res.result : res;
-      setT(tt);
-    } catch (e) {
-      console.error(e);
-      setT(null);
-      setError(getErrorText(e));
+      setLoading(true);
+      setError('');
+
+      const t = await apiFetch(`/api/v1/trainings/${trainingId}`);
+
+      let locLabel = '';
+      const locId = t?.location_id ?? t?.locationId ?? null;
+      if (locId != null) {
+        try {
+          const locRes = await apiFetch('/api/v1/locations?limit=500&offset=0&only_with_trainings=true');
+          const items = Array.isArray(locRes) ? locRes : Array.isArray(locRes?.items) ? locRes.items : [];
+          const loc = items.find((x) => (x?.id ?? x?.location_id ?? x?.locationId) === locId);
+          locLabel = normalizeLocationLabel(loc) || '';
+        } catch {
+          // ignore
+        }
+      }
+
+      setTraining(t);
+      setLocationLabel(locLabel);
+    } catch (err) {
+      setError(err?.message || 'Не удалось загрузить тренировку');
     } finally {
       setLoading(false);
     }
-  }
+  };
 
   useEffect(() => {
-    load();
+    let cancelled = false;
+    (async () => {
+      if (cancelled) return;
+      await load();
+    })();
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [trainingId]);
 
-  const status = String(t?.user_enrollment_status || "none").toLowerCase();
-  const canCancel =
-    status === "main" ||
-    status === "reserve" ||
-    status === "enrolled" ||
-    status === "booked" ||
-    status === "waitlist";
-  const canEnroll = !canCancel && status !== "not_allowed" && status !== "forbidden";
+  const startAt = useMemo(
+    () => parseDate(training?.starts_at ?? training?.start_at ?? training?.startsAt ?? training?.startAt),
+    [training],
+  );
+  const duration = useMemo(() => toNumber(training?.duration_minutes ?? training?.durationMinutes) ?? 0, [training]);
+  const endAt = useMemo(() => {
+    if (!startAt || !duration) return null;
+    return new Date(startAt.getTime() + duration * 60_000);
+  }, [startAt, duration]);
 
-  async function enroll() {
-    setBusy(true);
-    setError("");
+  const timePill = useMemo(() => formatTime(startAt), [startAt]);
+  const timeRange = useMemo(() => {
+    if (!startAt) return '';
+    const a = formatTime(startAt);
+    const b = endAt ? formatTime(endAt) : '';
+    return b ? `${a}–${b}` : a;
+  }, [startAt, endAt]);
+
+  const dateLabel = useMemo(() => formatDate(startAt), [startAt]);
+  const levelChips = useMemo(() => buildLevelChips(training), [training]);
+
+  const tiers = useMemo(() => {
+    const raw = Array.isArray(training?.price_tiers) ? training.price_tiers : [];
+    const copy = [...raw];
+    copy.sort((a, b) => (toNumber(a?.sort_order) ?? 0) - (toNumber(b?.sort_order) ?? 0));
+    return copy;
+  }, [training]);
+
+  const peopleRange = useMemo(() => {
+    const nums = tiers.map((x) => parseTierPeople(x?.title)).filter((x) => x != null);
+    if (!nums.length) return { min: null, max: null };
+    return { min: Math.min(...nums), max: Math.max(...nums) };
+  }, [tiers]);
+
+  const capacityMain = useMemo(() => toNumber(training?.capacity_main) ?? 0, [training]);
+  const freePlaces = useMemo(() => {
+    const fp = toNumber(training?.free_places);
+    if (fp != null) return fp;
+    const occupied = toNumber(training?.occupied_main) ?? 0;
+    const left = capacityMain - occupied;
+    return left >= 0 ? left : 0;
+  }, [training, capacityMain]);
+
+  const isEnrolled = useMemo(() => {
+    const st = (training?.user_enrollment_status ?? '').toString();
+    return st === 'main' || st === 'reserve';
+  }, [training]);
+
+  const enrolledStatusLabel = useMemo(() => {
+    const st = (training?.user_enrollment_status ?? '').toString();
+    if (st === 'main') return 'Вы записаны';
+    if (st === 'reserve') return 'Вы в резерве';
+    return '';
+  }, [training]);
+
+  const canEnroll = Boolean(training?.can_enroll);
+  const canEnrollReserve = Boolean(training?.can_enroll_reserve);
+  const isReserveAvailable = Boolean(training?.is_reserve_available);
+
+  const cancelDeadlineAt = useMemo(() => parseDate(training?.cancel_deadline_at), [training]);
+  const canCancel = useMemo(() => {
+    const apiCan = Boolean(training?.can_cancel);
+    if (!apiCan) return false;
+    if (!cancelDeadlineAt) return apiCan;
+    return Date.now() <= cancelDeadlineAt.getTime();
+  }, [training, cancelDeadlineAt]);
+
+  const cancelBlockedHint = useMemo(() => {
+    if (!isEnrolled) return '';
+    if (canCancel) return '';
+    return 'Отмена недоступна менее чем за 2 часа до начала тренировки.';
+  }, [isEnrolled, canCancel]);
+
+  const enrollButtonLabel = useMemo(() => {
+    if (isEnrolled) return 'Отказаться от тренировки';
+    if (canEnroll) return 'Записаться';
+    if (canEnrollReserve && isReserveAvailable) return 'Записаться в резерв';
+    return 'Запись недоступна';
+  }, [isEnrolled, canEnroll, canEnrollReserve, isReserveAvailable]);
+
+  const enrollButtonDisabled = useMemo(() => {
+    if (loading || saving) return true;
+    if (isEnrolled) return !canCancel;
+    if (canEnroll) return false;
+    if (canEnrollReserve && isReserveAvailable) return false;
+    return true;
+  }, [loading, saving, isEnrolled, canCancel, canEnroll, canEnrollReserve, isReserveAvailable]);
+
+  const priceLabel = useMemo(() => {
+    const p = training?.final_price ?? training?.price;
+    const n = toNumber(p);
+    if (n == null) return '';
+    return `${Math.round(n)} ₽`;
+  }, [training]);
+
+  const openEnrollFlow = () => {
+    if (isEnrolled) {
+      if (!canCancel) return;
+      setCancelOpen(true);
+      return;
+    }
+
+    if (canEnroll || (canEnrollReserve && isReserveAvailable)) {
+      setBookingOpen(true);
+    }
+  };
+
+  const doEnroll = async () => {
+    if (!trainingId) return;
     try {
-      try {
-        await apiPost(`/api/v1/trainings/${trainingId}/enroll`, {});
-      } catch {
-        // fallback — если у тебя другой endpoint
-        await apiPost(`/api/v1/enrollments`, { training_id: trainingId });
-      }
+      setSaving(true);
+
+      const payload = {
+        training_id: trainingId,
+        is_paid: false,
+      };
+
+      const tierId = training?.picked_price_tier_id ?? null;
+      if (tierId != null) payload.price_tier_id = tierId;
+
+      await apiFetch('/api/v1/enrollments', {
+        method: 'POST',
+        body: payload,
+      });
+
+      setBookingOpen(false);
       await load();
       onChanged?.();
-    } catch (e) {
-      console.error(e);
-      setError(getErrorText(e));
+    } catch (err) {
+      setError(err?.message || 'Не удалось записаться');
     } finally {
-      setBusy(false);
+      setSaving(false);
     }
-  }
+  };
 
-  async function cancel() {
-    setBusy(true);
-    setError("");
+  const doCancel = async () => {
+    const enrollmentId = training?.user_enrollment_id ?? null;
+    if (!enrollmentId) {
+      setError('Не удалось отменить: отсутствует enrollment_id');
+      return;
+    }
+
     try {
-      try {
-        await apiDelete(`/api/v1/trainings/${trainingId}/enroll`);
-      } catch {
-        // fallback — если у тебя другой endpoint
-        await apiPost(`/api/v1/enrollments/cancel`, { training_id: trainingId });
-      }
+      setSaving(true);
+      await apiFetch(`/api/v1/enrollments/${enrollmentId}/cancel`, { method: 'POST' });
+      setCancelOpen(false);
       await load();
       onChanged?.();
-    } catch (e) {
-      console.error(e);
-      setError(getErrorText(e));
+    } catch (err) {
+      setError(err?.message || 'Не удалось отменить запись');
     } finally {
-      setBusy(false);
+      setSaving(false);
     }
-  }
+  };
 
-  if (loading) return <div className="empty">Загрузка...</div>;
-  if (error && !t) return <div className="empty">{error}</div>;
-  if (!t) return <div className="empty">Тренировка не найдена</div>;
-
-  const start = t.start_at ?? t.starts_at ?? null;
-
-  const main = t.main || t.main_list || t.roster_main || t.enrollments_main || [];
-  const reserve = t.reserve || t.reserve_list || t.roster_reserve || t.enrollments_reserve || [];
-  const allEnrollments = t.enrollments || [];
-
-  const locationUrl =
-    t.maps_url ||
-    t.location?.maps_url ||
-    t.location?.mapsUrl ||
-    t.location?.map_url ||
-    null;
-
-  const howToVideo =
-    t.video_url ||
-    t.location?.video_url ||
-    t.location?.videoUrl ||
-    null;
-
-  const actionBtn = (primary = false) => ({
-    width: "100%",
-    padding: "10px 12px",
-    borderRadius: 14,
-    border: primary ? "none" : "1px solid rgba(0,0,0,0.12)",
-    background: primary ? "#2f7df6" : "transparent",
-    color: primary ? "#fff" : "#2f7df6",
-    fontWeight: 700,
-    cursor: "pointer",
-  });
+  const img =
+    training?.image_url ||
+    'https://images.unsplash.com/photo-1521412644187-c49fa049e84d?auto=format&fit=crop&w=1200&q=60';
 
   return (
     <>
-      <div className="card">
-        <div className="card-title">{t.title || "Тренировка"}</div>
-        <div className="muted">Старт: {toRuDateTime(start)}</div>
-        <div className="muted">Длительность: {t.duration_minutes ?? "—"} мин</div>
-        <div className="muted">Свободно мест: {t.free_places ?? "—"}</div>
-        <div className="muted">Статус: {t.user_enrollment_status || "none"}</div>
-
-        {error ? <div className="muted" style={{ color: "#ef4444", fontWeight: 600, marginTop: 10 }}>{error}</div> : null}
-
-        <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
-          {canEnroll ? (
-            <button style={actionBtn(true)} disabled={busy} onClick={enroll}>
-              Записаться
-            </button>
-          ) : null}
-
-          {canCancel ? (
-            <button style={actionBtn(false)} disabled={busy} onClick={cancel}>
-              Отменить запись
-            </button>
-          ) : null}
-
-          {locationUrl ? (
-            <button
-              style={actionBtn(false)}
-              onClick={() => window.open(locationUrl, "_blank", "noopener,noreferrer")}
-            >
-              Открыть карту
-            </button>
-          ) : null}
-
-          {howToVideo ? (
-            <button
-              style={actionBtn(false)}
-              onClick={() => window.open(howToVideo, "_blank", "noopener,noreferrer")}
-            >
-              Как пройти (видео)
-            </button>
-          ) : null}
-
-          <button
-            style={actionBtn(false)}
-            onClick={async () => {
-              try {
-                await openCalendar(trainingId);
-              } catch (e) {
-                setError(e?.message || "Не удалось открыть календарь");
-              }
-            }}
-          >
-            Добавить в календарь
-          </button>
-        </div>
-      </div>
-
-      <div className="card">
-        <div className="card-title">Состав</div>
-
-        {Array.isArray(main) && main.length > 0 ? (
-          <>
-            <div className="muted" style={{ marginTop: 8, marginBottom: 6 }}>
-              Основа
-            </div>
-            {main.map((p, idx) => (
-              <div className="muted" key={p.user_id ?? p.id ?? idx} style={{ padding: "6px 0" }}>
-                {(p.first_name || p.user_first_name || "Игрок") + " " + (p.last_name || "")}
-                {p.username ? ` (@${p.username})` : ""}
-              </div>
-            ))}
-          </>
-        ) : null}
-
-        {Array.isArray(reserve) && reserve.length > 0 ? (
-          <>
-            <div className="muted" style={{ marginTop: 12, marginBottom: 6 }}>
-              Резерв
-            </div>
-            {reserve.map((p, idx) => (
-              <div className="muted" key={p.user_id ?? p.id ?? idx} style={{ padding: "6px 0" }}>
-                {(p.first_name || p.user_first_name || "Игрок") + " " + (p.last_name || "")}
-                {p.username ? ` (@${p.username})` : ""}
-              </div>
-            ))}
-          </>
-        ) : null}
-
-        {!main?.length && !reserve?.length && Array.isArray(allEnrollments) && allEnrollments.length > 0 ? (
-          <>
-            <div className="muted" style={{ marginTop: 12, marginBottom: 6 }}>
-              Записи
-            </div>
-            {allEnrollments.map((e, idx) => (
-              <div className="muted" key={e.id ?? idx} style={{ padding: "6px 0" }}>
-                {(e.user?.first_name || e.first_name || "Игрок") +
-                  " " +
-                  (e.user?.last_name || e.last_name || "")}
-                {e.status ? ` • ${e.status}` : ""}
-              </div>
-            ))}
-          </>
-        ) : null}
-
-        {!main?.length && !reserve?.length && !allEnrollments?.length ? (
-          <div className="empty" style={{ padding: 0 }}>
-            Состав пока недоступен
+      <section className="screen active" id="screen-session">
+        {loading ? (
+          <div className="loader">Загрузка…</div>
+        ) : error ? (
+          <div className="empty-state" style={{ marginTop: 18 }}>
+            <div className="empty-ico">⚠️</div>
+            <h3>Ошибка</h3>
+            <p>{error}</p>
           </div>
+        ) : training ? (
+          <>
+            <div className="hero-image" style={{ backgroundImage: `url(${img})` }}>
+              <div className="hero-top">
+                <button className="back-btn" type="button" onClick={onBack} aria-label="Назад">
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <path strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+                  </svg>
+                </button>
+
+                <button className="icon-btn" type="button" aria-label="Статус" disabled>
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <path strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" d="M18 8l-6 6-3-3" />
+                  </svg>
+                </button>
+              </div>
+
+              <div className="hero-time-pill">{timePill}</div>
+
+              <div className="hero-bottom-chips">
+                {levelChips.map((lvl, i) => (
+                  <span key={`${lvl}-${i}`} className="session-chip chip-level-light">
+                    {lvl}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <div className="details-card">
+              <div className="details-title">{training?.title || 'Тренировка'}</div>
+              {training?.description ? (
+                <p className="details-note" style={{ marginTop: 10 }}>
+                  {training.description}
+                </p>
+              ) : null}
+              {tiers.length ? (
+                <ul className="details-list">
+                  {tiers.map((x) => (
+                    <li key={x?.id ?? x?.title}>
+                      {x?.title} — {Math.round(toNumber(x?.price) ?? 0)} ₽
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+
+            <div className="details-card">
+              <div className="label-row">
+                <span className="label-muted">Дата</span>
+                <span className="label-strong">{dateLabel}</span>
+              </div>
+              <div className="label-row">
+                <span className="label-muted">Время</span>
+                <span className="label-strong">{timeRange}</span>
+              </div>
+              <div className="label-row">
+                <span className="label-muted">Тренер</span>
+                <span className="label-strong">{training?.coach_name || 'Без тренера'}</span>
+              </div>
+              <div className="label-row">
+                <span className="label-muted">Стоимость</span>
+                <span className="label-strong">{priceLabel || '—'}</span>
+              </div>
+              <div className="label-row">
+                <span className="label-muted">Адрес</span>
+                <span className="label-strong">{locationLabel || 'Адрес уточняется'}</span>
+              </div>
+              <p className="details-note">Точное количество участников и финальная стоимость рассчитываются перед началом тренировки.</p>
+            </div>
+
+            <div className="participants-card">
+              <div className="label-row">
+                <span className="label-muted">Участники</span>
+                <span className="participants-highlight">
+                  {freePlaces > 0 ? `Осталось ${freePlaces} мест` : 'Мест нет'}
+                </span>
+              </div>
+              <div className="participants-row">
+                <span>Минимум</span>
+                <span>{peopleRange.min != null ? `${peopleRange.min} мест` : '—'}</span>
+              </div>
+              <div className="participants-row">
+                <span>Максимум</span>
+                <span>{peopleRange.max != null ? `${peopleRange.max} мест` : `${capacityMain} мест`}</span>
+              </div>
+              <div className="participants-row">
+                <span>Свободно</span>
+                <span>{freePlaces} мест</span>
+              </div>
+              {isEnrolled ? <p className="hint">{enrolledStatusLabel}</p> : <p className="hint">Успей записаться первым!</p>}
+              {cancelBlockedHint ? <p className="hint" style={{ color: 'var(--danger)' }}>{cancelBlockedHint}</p> : null}
+            </div>
+
+            <button className="primary-btn" type="button" onClick={openEnrollFlow} disabled={enrollButtonDisabled}>
+              {saving ? 'Подождите…' : enrollButtonLabel}
+            </button>
+          </>
         ) : null}
-      </div>
+      </section>
+
+      {bookingOpen ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true">
+          <div className="modal">
+            <div className="modal-title">Записаться на занятие</div>
+            <div className="modal-body">
+              <p>
+                <strong>{training?.title || 'Тренировка'}</strong>
+              </p>
+              <p style={{ marginTop: 8 }}>
+                {dateLabel ? `${dateLabel}, ` : ''}{timeRange}
+              </p>
+              <p style={{ marginTop: 10 }}>
+                Стоимость: <strong>{priceLabel || '—'}</strong>
+              </p>
+              {canEnrollReserve && !canEnroll ? (
+                <p className="hint" style={{ marginTop: 10 }}>
+                  Основные места заняты. При записи вы попадёте в резерв.
+                </p>
+              ) : null}
+            </div>
+
+            <div className="modal-actions">
+              <button className="secondary-btn" type="button" onClick={() => setBookingOpen(false)} disabled={saving}>
+                Отмена
+              </button>
+              <button className="primary-btn" type="button" onClick={doEnroll} disabled={saving}>
+                Записаться
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {cancelOpen ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true">
+          <div className="modal">
+            <div className="modal-title">Отказаться от тренировки</div>
+            <div className="modal-body">
+              <p>Вы уверены, что хотите отменить запись?</p>
+              <p className="hint" style={{ marginTop: 10 }}>
+                По ТЗ отмена возможна не позднее, чем за 2 часа до начала.
+              </p>
+            </div>
+            <div className="modal-actions">
+              <button className="secondary-btn" type="button" onClick={() => setCancelOpen(false)} disabled={saving}>
+                Назад
+              </button>
+              <button className="primary-btn" type="button" onClick={doCancel} disabled={saving}>
+                Подтвердить
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }
