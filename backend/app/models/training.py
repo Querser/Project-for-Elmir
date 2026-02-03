@@ -13,7 +13,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy.sql import literal, case
+from sqlalchemy.sql import case, literal
 
 from .base import Base
 
@@ -34,7 +34,12 @@ class Training(Base):
     title: Mapped[str] = mapped_column(String(100), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
 
-    start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    # Основное поле времени старта (новое)
+    start_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        index=True,
+    )
     duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
 
     min_level_name: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
@@ -60,7 +65,59 @@ class Training(Base):
         server_default="false",
     )
 
-    # --------- совместимость со старым кодом ----------
+    # ---------------- Алиасы для совместимости ----------------
+    # Старый контракт/схемы часто ждут starts_at / ends_at.
+    # Делаем так, чтобы from_orm / сериализация брали значения, а старый код мог читать/писать.
+
+    @hybrid_property
+    def starts_at(self) -> datetime:
+        return self.start_at
+
+    @starts_at.setter
+    def starts_at(self, value: datetime) -> None:
+        self.start_at = value
+
+    @starts_at.expression
+    def starts_at(cls):
+        return cls.start_at
+
+    @property
+    def end_at(self) -> Optional[datetime]:
+        # В БД нет end_at — считаем из duration_minutes
+        if self.start_at is None or self.duration_minutes is None:
+            return None
+        return self.start_at + timedelta(minutes=int(self.duration_minutes))
+
+    @property
+    def ends_at(self) -> Optional[datetime]:
+        # Алиас под старый контракт
+        return self.end_at
+
+    @ends_at.setter
+    def ends_at(self, value: Optional[datetime]) -> None:
+        """
+        Если старый код пытается выставить ends_at, пересчитываем duration_minutes.
+        Если start_at ещё не задан — ничего не делаем (безопасно).
+        """
+        if value is None:
+            return
+        if self.start_at is None:
+            return
+        delta = value - self.start_at
+        minutes = int(delta.total_seconds() // 60)
+        # duration_minutes у нас NOT NULL, но setter вызывается только если реально задают ends_at
+        self.duration_minutes = max(0, minutes)
+
+    # Доп. алиасы (иногда фронт/клиент ожидает camelCase)
+    @property
+    def startsAt(self) -> datetime:
+        return self.start_at
+
+    @property
+    def endsAt(self) -> Optional[datetime]:
+        return self.end_at
+
+    # --------- совместимость со старым кодом (status) ----------
     @hybrid_property
     def status(self) -> str:
         return "cancelled" if self.is_cancelled else "scheduled"
@@ -71,13 +128,6 @@ class Training(Base):
             (cls.is_cancelled.is_(True), literal("cancelled")),
             else_=literal("scheduled"),
         )
-
-    @property
-    def end_at(self) -> Optional[datetime]:
-        # В БД нет end_at — считаем из duration_minutes
-        if self.start_at is None or self.duration_minutes is None:
-            return None
-        return self.start_at + timedelta(minutes=int(self.duration_minutes))
 
     # -------- relationships --------
     location: Mapped[Optional["Location"]] = relationship(

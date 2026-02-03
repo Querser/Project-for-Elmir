@@ -62,7 +62,7 @@ export default function Profile({ onBack }) {
     phone: "",
     gender: "male",
     birth_date: "",
-    show_telegram: true,
+    show_telegram: true, // UI-имя, на бэк уходит как is_telegram_public
   });
 
   useEffect(() => {
@@ -95,8 +95,11 @@ export default function Profile({ onBack }) {
           phone: normalizeStr(p?.phone ?? ""),
           gender: normalizeStr(p?.gender ?? p?.sex ?? "male") || "male",
           birth_date: normalizeStr(p?.birth_date ?? p?.birthDate ?? ""),
+          // ВАЖНО: читаем именно is_telegram_public (как на бэке),
+          // но оставляем в UI-форме show_telegram.
           show_telegram: Boolean(
-            p?.show_telegram ??
+            p?.is_telegram_public ??
+              p?.show_telegram ??
               p?.telegram_visible ??
               p?.telegram_public ??
               true
@@ -160,16 +163,25 @@ export default function Profile({ onBack }) {
     setErrorText("");
 
     try {
+      // КЛЮЧЕВОЙ ФИКС 422:
+      // - не шлём пустую строку в birth_date (date-поле)
+      // - не шлём лишнее show_telegram (на бэке is_telegram_public)
       const payload = {
         first_name: normalizeStr(form.first_name),
         last_name: normalizeStr(form.last_name),
         phone: normalizePhone(form.phone),
         gender: normalizeStr(form.gender),
         birth_date: normalizeStr(form.birth_date),
-        show_telegram: Boolean(form.show_telegram),
+        is_telegram_public: Boolean(form.show_telegram),
       };
 
-      // PATCH (правильно по твоему бэку). PUT тоже поддерживается бэком после фикса.
+      // убираем пустые строки, чтобы FastAPI/Pydantic не ловил date=""
+      Object.keys(payload).forEach((k) => {
+        if (payload[k] === "" || payload[k] === null || payload[k] === undefined) {
+          delete payload[k];
+        }
+      });
+
       const updated = await apiFetch("/api/v1/profile/me", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -298,10 +310,12 @@ export default function Profile({ onBack }) {
                 await apiFetch("/api/v1/profile/me", {
                   method: "PATCH",
                   headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ show_telegram: Boolean(form.show_telegram) }),
+                  body: JSON.stringify({
+                    is_telegram_public: Boolean(form.show_telegram),
+                  }),
                 });
               } catch {
-                // eslint no-unused-vars: catch без переменной
+                // ignore
               }
             }}
             style={{ marginTop: 10 }}

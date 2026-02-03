@@ -1,36 +1,36 @@
-# app/core/deps.py
-from __future__ import annotations
+# backend/tools/check_unpaid_and_autoban.py
+import sys
+import time
+import argparse
 
-from collections.abc import AsyncGenerator
-from typing import TYPE_CHECKING
+sys.path.append("/app")
 
-from fastapi import Request
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
-from app.db.session import engine  # используем уже настроенный engine
-
-if TYPE_CHECKING:
-    from app.models.user import User
-
-# Фабрика сессий поверх существующего engine
-_async_session_factory = async_sessionmaker(
-    bind=engine,
-    class_=AsyncSession,
-    expire_on_commit=False,
-)
+from app.services.enrollment_service import check_unpaid_enrollments_and_autoban
 
 
-async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
-    """
-    Dependency для FastAPI: даёт асинхронную сессию БД.
-    """
-    async with _async_session_factory() as session:
-        yield session
+def run_once() -> None:
+    check_unpaid_enrollments_and_autoban()
+    print("✅ check_unpaid_enrollments_and_autoban: done")
 
 
-def get_current_user(request: Request) -> "User | None":
-    """
-    Достаём пользователя, которого положил middleware в request.state.user.
-    Если пользователь не авторизован по Telegram — вернётся None.
-    """
-    return getattr(request.state, "user", None)
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run unpaid enrollments check and autoban job.")
+    parser.add_argument("--loop", action="store_true", help="Run in loop")
+    parser.add_argument("--interval", type=int, default=60, help="Interval seconds for --loop")
+    args = parser.parse_args()
+
+    if not args.loop:
+        run_once()
+        return
+
+    print(f"🔁 Loop mode enabled. Interval: {args.interval}s")
+    while True:
+        try:
+            run_once()
+        except Exception as e:
+            print(f"❌ Job failed: {e}")
+        time.sleep(max(5, args.interval))
+
+
+if __name__ == "__main__":
+    main()

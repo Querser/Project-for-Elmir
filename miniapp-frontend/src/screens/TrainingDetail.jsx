@@ -40,9 +40,52 @@ function buildLevelChips(t) {
   return [minLv, maxLv].filter(Boolean);
 }
 
+function sameId(a, b) {
+  if (a == null || b == null) return false;
+  const na = Number(a);
+  const nb = Number(b);
+  if (Number.isFinite(na) && Number.isFinite(nb)) return na === nb;
+  return String(a) === String(b);
+}
+
+function extractLatLon(obj) {
+  if (!obj) return { lat: null, lon: null };
+
+  const latCandidates = [
+    obj.lat,
+    obj.latitude,
+    obj.geo_lat,
+    obj.geoLat,
+    obj.location_lat,
+    obj.locationLat,
+    obj.coords?.lat,
+    obj.coords?.latitude,
+  ];
+
+  const lonCandidates = [
+    obj.lon,
+    obj.lng,
+    obj.longitude,
+    obj.geo_lon,
+    obj.geoLon,
+    obj.location_lon,
+    obj.locationLon,
+    obj.coords?.lon,
+    obj.coords?.lng,
+    obj.coords?.longitude,
+  ];
+
+  const lat = latCandidates.map(toNumber).find((x) => x != null) ?? null;
+  const lon = lonCandidates.map(toNumber).find((x) => x != null) ?? null;
+
+  return { lat, lon };
+}
+
 export default function TrainingDetail({ trainingId, onBack, onChanged }) {
   const [training, setTraining] = useState(null);
   const [locationLabel, setLocationLabel] = useState('');
+  const [locationObj, setLocationObj] = useState(null);
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -59,14 +102,26 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
 
       const t = await apiFetch(`/api/v1/trainings/${trainingId}`);
 
+      // location label + coords (пытаемся достать из тренировки или из списка локаций)
       let locLabel = '';
+      let locObj = null;
+
+      const directLoc = t?.location ?? t?.place ?? null;
+      if (directLoc) {
+        locLabel = normalizeLocationLabel(directLoc) || '';
+        locObj = directLoc;
+      }
+
       const locId = t?.location_id ?? t?.locationId ?? null;
       if (locId != null) {
         try {
           const locRes = await apiFetch('/api/v1/locations?limit=500&offset=0&only_with_trainings=true');
           const items = Array.isArray(locRes) ? locRes : Array.isArray(locRes?.items) ? locRes.items : [];
-          const loc = items.find((x) => (x?.id ?? x?.location_id ?? x?.locationId) === locId);
-          locLabel = normalizeLocationLabel(loc) || '';
+          const found = items.find((x) => sameId(x?.id ?? x?.location_id ?? x?.locationId, locId));
+          if (found) {
+            locLabel = normalizeLocationLabel(found) || locLabel || '';
+            locObj = found;
+          }
         } catch {
           // ignore
         }
@@ -74,6 +129,7 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
 
       setTraining(t);
       setLocationLabel(locLabel);
+      setLocationObj(locObj);
     } catch (err) {
       setError(err?.message || 'Не удалось загрузить тренировку');
     } finally {
@@ -166,8 +222,46 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
     return 'Отмена недоступна менее чем за 2 часа до начала тренировки.';
   }, [isEnrolled, canCancel]);
 
+  // --- Yandex maps widget ---
+  const coords = useMemo(() => {
+    // приоритет: тренировка -> locationObj
+    const a = extractLatLon(training);
+    if (a.lat != null && a.lon != null) return a;
+    const b = extractLatLon(locationObj);
+    if (b.lat != null && b.lon != null) return b;
+    return { lat: null, lon: null };
+  }, [training, locationObj]);
+
+  const yandexMapSrc = useMemo(() => {
+    const label = (locationLabel || '').trim();
+    if (coords.lat != null && coords.lon != null) {
+      const ll = `${coords.lon},${coords.lat}`;
+      // pin on map
+      return `https://yandex.ru/map-widget/v1/?ll=${encodeURIComponent(ll)}&z=15&pt=${encodeURIComponent(
+        ll,
+      )},pm2rdm`;
+    }
+    if (label) {
+      // fallback by address text (если нет координат)
+      return `https://yandex.ru/map-widget/v1/?text=${encodeURIComponent(label)}&z=15`;
+    }
+    return '';
+  }, [coords, locationLabel]);
+
+  const yandexRouteHref = useMemo(() => {
+    const label = (locationLabel || '').trim();
+    if (coords.lat != null && coords.lon != null) {
+      // from "my location" to точка (обычно Яндекс сам запросит геолокацию)
+      return `https://yandex.ru/maps/?mode=routes&rtext=~${coords.lat},${coords.lon}&rtt=auto`;
+    }
+    if (label) {
+      return `https://yandex.ru/maps/?mode=routes&rtext=~${encodeURIComponent(label)}&rtt=auto`;
+    }
+    return '';
+  }, [coords, locationLabel]);
+
   const enrollButtonLabel = useMemo(() => {
-    if (isEnrolled) return 'Отказаться от тренировки';
+    if (isEnrolled) return 'Отменить запись';
     if (canEnroll) return 'Записаться';
     if (canEnrollReserve && isReserveAvailable) return 'Записаться в резерв';
     return 'Запись недоступна';
@@ -194,7 +288,6 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
       setCancelOpen(true);
       return;
     }
-
     if (canEnroll || (canEnrollReserve && isReserveAvailable)) {
       setBookingOpen(true);
     }
@@ -330,15 +423,47 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
                 <span className="label-muted">Адрес</span>
                 <span className="label-strong">{locationLabel || 'Адрес уточняется'}</span>
               </div>
-              <p className="details-note">Точное количество участников и финальная стоимость рассчитываются перед началом тренировки.</p>
+
+              {/* Yandex Map Widget */}
+              {yandexMapSrc ? (
+                <div style={{ marginTop: 12 }}>
+                  <div style={{ borderRadius: 16, overflow: 'hidden' }}>
+                    <iframe
+                      title="Yandex Map"
+                      src={yandexMapSrc}
+                      width="100%"
+                      height="240"
+                      frameBorder="0"
+                      style={{ display: 'block' }}
+                      allowFullScreen
+                    />
+                  </div>
+
+                  {yandexRouteHref ? (
+                    <div style={{ marginTop: 10 }}>
+                      <a
+                        className="secondary-btn"
+                        href={yandexRouteHref}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ display: 'inline-flex', justifyContent: 'center', width: '100%' }}
+                      >
+                        Построить маршрут
+                      </a>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              <p className="details-note">
+                Точное количество участников и финальная стоимость рассчитываются перед началом тренировки.
+              </p>
             </div>
 
             <div className="participants-card">
               <div className="label-row">
                 <span className="label-muted">Участники</span>
-                <span className="participants-highlight">
-                  {freePlaces > 0 ? `Осталось ${freePlaces} мест` : 'Мест нет'}
-                </span>
+                <span className="participants-highlight">{freePlaces > 0 ? `Осталось ${freePlaces} мест` : 'Мест нет'}</span>
               </div>
               <div className="participants-row">
                 <span>Минимум</span>
@@ -353,7 +478,11 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
                 <span>{freePlaces} мест</span>
               </div>
               {isEnrolled ? <p className="hint">{enrolledStatusLabel}</p> : <p className="hint">Успей записаться первым!</p>}
-              {cancelBlockedHint ? <p className="hint" style={{ color: 'var(--danger)' }}>{cancelBlockedHint}</p> : null}
+              {cancelBlockedHint ? (
+                <p className="hint" style={{ color: 'var(--danger)' }}>
+                  {cancelBlockedHint}
+                </p>
+              ) : null}
             </div>
 
             <button className="primary-btn" type="button" onClick={openEnrollFlow} disabled={enrollButtonDisabled}>
@@ -372,7 +501,8 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
                 <strong>{training?.title || 'Тренировка'}</strong>
               </p>
               <p style={{ marginTop: 8 }}>
-                {dateLabel ? `${dateLabel}, ` : ''}{timeRange}
+                {dateLabel ? `${dateLabel}, ` : ''}
+                {timeRange}
               </p>
               <p style={{ marginTop: 10 }}>
                 Стоимость: <strong>{priceLabel || '—'}</strong>
@@ -399,7 +529,7 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
       {cancelOpen ? (
         <div className="modal-backdrop" role="dialog" aria-modal="true">
           <div className="modal">
-            <div className="modal-title">Отказаться от тренировки</div>
+            <div className="modal-title">Отменить запись</div>
             <div className="modal-body">
               <p>Вы уверены, что хотите отменить запись?</p>
               <p className="hint" style={{ marginTop: 10 }}>

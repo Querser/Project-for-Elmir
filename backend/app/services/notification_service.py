@@ -52,12 +52,16 @@ class NotificationService:
         entity_type: str | None = None,
         entity_id: int | None = None,
     ) -> Notification:
+        # Гарантируем NOT NULL поля (title/body/text/type)
+        safe_title = (title or "").strip() or "Уведомление"
+        safe_text = (text or "").strip()
+
         n = Notification(
             user_id=user_id,
             type=type_,
-            title=title,
-            body=text,
-            text=text,
+            title=safe_title,
+            body=safe_text,
+            text=safe_text,
             url=url,
             entity_type=entity_type,
             entity_id=entity_id,
@@ -70,17 +74,24 @@ class NotificationService:
 
     @staticmethod
     def broadcast_notification(db: Session, payload: AdminBroadcastNotificationIn) -> int:
+        # Подстраховка от NULL/пустых значений под NOT NULL ограничения
+        safe_title = (payload.title or "").strip() or "Уведомление"
+        safe_text = (payload.text or "").strip()
+
         user_ids = [u for (u,) in db.query(User.id).all()]
         objs = [
             Notification(
                 user_id=uid,
                 type=payload.type,
-                title=payload.title,
-                body=payload.text,
-                text=payload.text,
+                title=safe_title,
+                body=safe_text,
+                text=safe_text,
                 url=payload.url,
                 entity_type=payload.entity_type,
                 entity_id=payload.entity_id,
+                # is_read можно не ставить (есть server_default=false),
+                # но явное значение тоже ок:
+                is_read=False,
             )
             for uid in user_ids
         ]
@@ -102,16 +113,20 @@ class NotificationService:
         )
         user_ids = [u for (u,) in ids]
 
+        safe_title = (payload.title or "").strip() or "Уведомление"
+        safe_text = (payload.text or "").strip()
+
         objs = [
             Notification(
                 user_id=uid,
                 type=payload.type,
-                title=payload.title,
-                body=payload.text,
-                text=payload.text,
+                title=safe_title,
+                body=safe_text,
+                text=safe_text,
                 url=payload.url,
                 entity_type="training",
                 entity_id=payload.training_id,
+                is_read=False,
             )
             for uid in user_ids
         ]

@@ -29,21 +29,33 @@ def list_locations(
     Локации для фильтра тренировок:
     - id всегда
     - name/address — если такие колонки реально есть в таблице locations
+    - latitude/longitude/maps_url — если есть в таблице (нужно для Яндекс.Карт)
     - only_with_trainings=True: возвращаем только локации, которые встречаются в trainings
     """
 
     insp = inspect(db.get_bind())
     loc_cols = {c["name"] for c in insp.get_columns("locations")}
 
-    # Популярные варианты названий колонок
     name_col = _pick_column(loc_cols, ["name", "title", "label"])
     address_col = _pick_column(loc_cols, ["address", "full_address", "addr", "location_address"])
+    metro_col = _pick_column(loc_cols, ["metro", "subway", "station"])
+    lat_col = _pick_column(loc_cols, ["latitude", "lat"])
+    lon_col = _pick_column(loc_cols, ["longitude", "lon", "lng"])
+    maps_url_col = _pick_column(loc_cols, ["maps_url", "map_url", "mapsUrl"])
 
     select_parts = ["l.id"]
     if name_col:
         select_parts.append(f"l.{name_col} AS name")
     if address_col:
         select_parts.append(f"l.{address_col} AS address")
+    if metro_col:
+        select_parts.append(f"l.{metro_col} AS metro")
+    if lat_col:
+        select_parts.append(f"l.{lat_col} AS latitude")
+    if lon_col:
+        select_parts.append(f"l.{lon_col} AS longitude")
+    if maps_url_col:
+        select_parts.append(f"l.{maps_url_col} AS maps_url")
 
     join_sql = "JOIN trainings t ON t.location_id = l.id" if only_with_trainings else ""
 
@@ -52,6 +64,8 @@ def list_locations(
         order_parts.append("name")
     if address_col:
         order_parts.append("address")
+    if metro_col:
+        order_parts.append("metro")
     order_parts.append("l.id")
     order_sql = ", ".join(order_parts)
 
@@ -84,6 +98,14 @@ def list_locations(
             item["name"] = r["name"]
         if "address" in r:
             item["address"] = r["address"]
+        if "metro" in r:
+            item["metro"] = r["metro"]
+        if "latitude" in r:
+            item["latitude"] = r["latitude"]
+        if "longitude" in r:
+            item["longitude"] = r["longitude"]
+        if "maps_url" in r:
+            item["maps_url"] = r["maps_url"]
         items.append(item)
 
     return {"items": items, "total": total, "limit": limit, "offset": offset}

@@ -25,12 +25,15 @@ def leaderboard(
 
     items = []
     for i, u in enumerate(users, start=offset + 1):
+        # username в списке отдаём только если пользователь разрешил
+        username = u.username if u.is_telegram_public else None
+
         items.append(
             {
                 "place": i,
                 "user_id": u.id,
                 "telegram_id": u.telegram_id,
-                "username": u.username,
+                "username": username,
                 "first_name": u.first_name,
                 "last_name": u.last_name,
                 "rating": u.rating,
@@ -66,6 +69,7 @@ def my_rating(
             "user_id": user.id,
             "rating": user.rating,
             "cups": user.cups,
+            "level_id": user.level_id,  # ✅ нужно для "Мой уровень" на фронте
             "position": position,
             "total_users": total,
         }

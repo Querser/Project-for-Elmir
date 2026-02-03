@@ -13,30 +13,48 @@ from app.schemas.user import UserProfileUpdate
 # --------- Нормализация телефона --------- #
 def normalize_phone(raw_phone: str) -> str:
     """
-    Простая нормализация под российский номер:
+    Нормализация под российский номер:
     - оставляем только цифры;
-    - допускаем 10 или 11 цифр;
+    - допускаем 10 цифр (9991234567) или 11 цифр, если начинается с 7/8;
     - приводим к формату +7XXXXXXXXXX.
+
+    Примеры допустимого ввода:
+      +7 (999) 123-45-67
+      8 999 123-45-67
+      9991234567
     """
+    if raw_phone is None:
+        # на всякий случай, хотя по типу str сюда обычно не прилетает None
+        raise AppException(message="Телефон не может быть пустым. Пример: +7 (999) 123-45-67")
+
+    raw_phone = str(raw_phone).strip()
     if not raw_phone:
-        raise AppException(
-            error_code="BAD_REQUEST",
-            message="Телефон не может быть пустым",
-        )
+        raise AppException(message="Телефон не может быть пустым. Пример: +7 (999) 123-45-67")
 
     digits = "".join(ch for ch in raw_phone if ch.isdigit())
 
-    # Примеры:
-    # 8 999 123-45-67  -> 89991234567
-    # +7 (999) 1234567 -> 79991234567
+    # 8 999 123-45-67  -> 89991234567 -> 9991234567
+    # +7 (999) 1234567 -> 79991234567 -> 9991234567
     if len(digits) == 11 and digits[0] in ("7", "8"):
         digits = digits[1:]
     elif len(digits) == 10:
         pass
     else:
         raise AppException(
-            error_code="BAD_REQUEST",
-            message="Некорректный формат телефона",
+            message=(
+                "Некорректный формат телефона. "
+                "Введите российский номер на 10 цифр (без +7/8) или на 11 цифр (с 7/8). "
+                "Пример: +7 (999) 123-45-67 или 8 999 123-45-67."
+            )
+        )
+
+    # После среза 11->10 гарантируем, что осталось ровно 10 цифр
+    if len(digits) != 10:
+        raise AppException(
+            message=(
+                "Некорректный формат телефона. "
+                "Пример: +7 (999) 123-45-67 или 8 999 123-45-67."
+            )
         )
 
     return "+7" + digits
@@ -147,10 +165,7 @@ def update_user_profile(
             .one_or_none()
         )
         if other:
-            raise AppException(
-                error_code="BAD_REQUEST",
-                message="Этот телефон уже используется другим пользователем",
-            )
+            raise AppException(message="Этот телефон уже используется другим пользователем")
 
         user.phone = normalized_phone
 

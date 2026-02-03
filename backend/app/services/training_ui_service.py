@@ -46,6 +46,7 @@ def build_training_ui_payload(db: Session, training: Any, user: Any | None) -> D
     occupied_reserve = 0
     user_enrollment_status = "none"
     user_queue_position = None
+    user_enrollment_id: Optional[int] = None
 
     if EnrollmentModel is not None and training_id is not None:
         q = db.query(EnrollmentModel).filter(EnrollmentModel.training_id == training_id)
@@ -54,8 +55,8 @@ def build_training_ui_payload(db: Session, training: Any, user: Any | None) -> D
         for e in rows:
             st = _status_value(getattr(e, "status", None)).lower()
 
-            # максимально “толерантная” классификация, чтобы не сломаться на твоих enum-ах
-            is_cancelled = "cancel" in st
+            # максимально “толерантная” классификация, чтобы не сломаться на enum-ах
+            is_cancelled = ("cancel" in st) or ("noshow" in st) or ("no_show" in st)
             is_reserve = ("reserve" in st) or ("wait" in st) or bool(getattr(e, "is_reserve", False))
 
             if not is_cancelled:
@@ -65,9 +66,14 @@ def build_training_ui_payload(db: Session, training: Any, user: Any | None) -> D
                     occupied_main += 1
 
             if user is not None and getattr(e, "user_id", None) == getattr(user, "id", None):
-                # статус для UI (если есть)
-                user_enrollment_status = st or "enrolled"
+                # --- статус для UI (frontend ждёт main/reserve/none/cancelled) ---
+                user_enrollment_id = getattr(e, "id", None)
                 user_queue_position = getattr(e, "queue_position", None)
+
+                if is_cancelled:
+                    user_enrollment_status = "cancelled"
+                else:
+                    user_enrollment_status = "reserve" if is_reserve else "main"
 
     free_places = max(capacity_main - occupied_main, 0)
 
@@ -94,15 +100,19 @@ def build_training_ui_payload(db: Session, training: Any, user: Any | None) -> D
 
     pick = pick_price_for_user(training, user, tiers)
 
-    # can_enroll: НЕ ломаем поведение — если нет user → False
+    # can_enroll/can_enroll_reserve:
+    # - can_enroll: есть место в основе
+    # - can_enroll_reserve: основа заполнена, но резерв доступен
+    is_reserve_available = capacity_reserve > occupied_reserve
     can_enroll = False
+    can_enroll_reserve = False
     if user is not None and user_enrollment_status in ("none", "", "cancelled", "canceled"):
-        can_enroll = free_places > 0 or capacity_reserve > occupied_reserve
+        can_enroll = free_places > 0
+        can_enroll_reserve = (free_places <= 0) and is_reserve_available
 
     deadline = cancel_deadline_at(training)
     can_cancel = False
     if user is not None and user_enrollment_status not in ("none", "", "cancelled", "canceled"):
-        # если поздно — can_cancel всё равно True, но UI покажет что будет штраф (см. флаг)
         can_cancel = True
 
     late_cancel = is_late_cancel(training)
@@ -112,15 +122,16 @@ def build_training_ui_payload(db: Session, training: Any, user: Any | None) -> D
         "occupied_reserve": occupied_reserve,
         "free_places": free_places,
         "can_enroll": can_enroll,
+        "can_enroll_reserve": can_enroll_reserve,
+        "is_reserve_available": is_reserve_available,
         "user_enrollment_status": user_enrollment_status,
         "user_queue_position": user_queue_position,
-        # price tiers UI
+        "user_enrollment_id": user_enrollment_id,
         "price_tiers": tiers_payload,
         "price_min": float(pick.price_min),
         "price_max": float(pick.price_max),
         "final_price": float(pick.final_price),
         "picked_price_tier_id": pick.picked_tier_id,
-        # cancel policy UI hints
         "cancel_deadline_at": deadline.isoformat().replace("+00:00", "Z") if deadline else None,
         "is_late_cancel": late_cancel,
         "can_cancel": can_cancel,

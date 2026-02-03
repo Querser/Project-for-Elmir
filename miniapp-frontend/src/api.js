@@ -3,6 +3,8 @@
 // - добавляет Telegram WebApp initData (prod) или dev-заголовки (dev)
 // - умеет разворачивать ответы формата { ok: true, result: ... }
 // - нормализует ошибки backend (detail / error / message)
+// - НЕ показывает HTML 502/503 от nginx пользователю
+// - Делает retry для GET/HEAD при временных ошибках (502/503/504) и сетевых проблемах
 
 import { buildAuthHeaders } from './auth';
 
@@ -26,6 +28,12 @@ function tryJsonParse(text) {
   } catch {
     return null;
   }
+}
+
+function looksLikeJson(text) {
+  if (!text) return false;
+  const t = text.trim();
+  return (t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'));
 }
 
 function normalizeErrorPayload(payload) {
@@ -70,6 +78,39 @@ export function extractItems(res) {
   return [];
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isTransientStatus(status) {
+  return status === 502 || status === 503 || status === 504;
+}
+
+function isLikelyHtml(contentType, raw) {
+  if ((contentType || '').includes('text/html')) return true;
+  const t = (raw || '').trim();
+  return t.startsWith('<!DOCTYPE html') || t.startsWith('<html') || t.includes('<title>502') || t.includes('Bad Gateway');
+}
+
+function makeFriendlyErrorMessage({ status, contentType, json, raw }) {
+  // Если JSON-ошибка — показываем нормализованную
+  if (json) return normalizeErrorPayload(json) || `HTTP ${status}`;
+
+  // Если это HTML от nginx (502/503) — не показываем HTML-портянку
+  if (isLikelyHtml(contentType, raw)) {
+    if (status === 502 || status === 503) {
+      return 'Сервис временно недоступен. Обнови страницу через пару секунд.';
+    }
+    return `HTTP ${status}`;
+  }
+
+  // Если plain text (короткий) — можно показать
+  const txt = (raw || '').trim();
+  if (txt && txt.length <= 200 && !/[<>]/.test(txt)) return txt;
+
+  return `HTTP ${status}`;
+}
+
 async function request(path, options = {}) {
   const url = buildUrl(path);
   const method = (options.method || 'GET').toUpperCase();
@@ -92,28 +133,57 @@ async function request(path, options = {}) {
     body = JSON.stringify(body);
   }
 
-  const res = await fetch(url, {
-    method,
-    headers,
-    body: method === 'GET' || method === 'HEAD' ? undefined : body,
-  });
+  // Retry только для безопасных запросов
+  const maxAttempts = (method === 'GET' || method === 'HEAD') ? 5 : 1;
 
-  const ct = res.headers.get('content-type') || '';
-  const raw = await res.text();
-  const json = ct.includes('application/json') ? (tryJsonParse(raw) ?? {}) : null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const res = await fetch(url, {
+        method,
+        headers,
+        body: method === 'GET' || method === 'HEAD' ? undefined : body,
+      });
 
-  if (!res.ok) {
-    const msg = json ? normalizeErrorPayload(json) : (raw || `HTTP ${res.status}`);
-    const err = new Error(msg || `HTTP ${res.status}`);
-    err.status = res.status;
-    err.payload = json || raw;
-    throw err;
+      const ct = res.headers.get('content-type') || '';
+      const raw = await res.text();
+
+      // Иногда JSON приходит без корректного content-type
+      const maybeJson = ct.includes('application/json') || looksLikeJson(raw);
+      const json = maybeJson ? (tryJsonParse(raw) ?? null) : null;
+
+      if (!res.ok) {
+        const msg = makeFriendlyErrorMessage({ status: res.status, contentType: ct, json, raw });
+
+        const err = new Error(msg || `HTTP ${res.status}`);
+        err.status = res.status;
+        err.payload = json || raw;
+        err.isTransient = isTransientStatus(res.status);
+        throw err;
+      }
+
+      if (res.status === 204) return null;
+
+      return unwrap(json != null ? json : raw);
+    } catch (e) {
+      const isNetworkError =
+        e instanceof TypeError ||
+        (typeof e?.message === 'string' && /failed to fetch|networkerror/i.test(e.message));
+
+      const canRetry = attempt < maxAttempts && (e?.isTransient === true || isNetworkError);
+
+      if (canRetry) {
+        // экспоненциальная задержка + небольшой джиттер
+        const backoff = 250 * (2 ** (attempt - 1));
+        const jitter = Math.floor(Math.random() * 120);
+        await sleep(backoff + jitter);
+        continue;
+      }
+
+      throw e;
+    }
   }
 
-  if (res.status === 204) return null;
-
-  const data = json != null ? json : raw;
-  return unwrap(data);
+  throw new Error('Неизвестная ошибка');
 }
 
 // === Public API ===

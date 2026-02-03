@@ -10,7 +10,11 @@ from pydantic import BaseModel, ConfigDict, Field
 class AdminBroadcastNotificationIn(BaseModel):
     type: str = Field(..., examples=["INFO", "SYSTEM", "TRAINING"])
     text: str = Field(..., min_length=1)
-    title: Optional[str] = None
+
+    # В БД title NOT NULL, поэтому даём безопасный default.
+    # Это НЕ ломает клиентов: если они не присылают title — будет "Уведомление".
+    title: str = Field(default="Уведомление", min_length=1)
+
     url: Optional[str] = None
     entity_type: Optional[str] = None
     entity_id: Optional[int] = None
@@ -19,7 +23,10 @@ class AdminBroadcastNotificationIn(BaseModel):
 class AdminTrainingNotificationIn(BaseModel):
     type: str = Field(default="TRAINING")
     text: str = Field(..., min_length=1)
-    title: Optional[str] = None
+
+    # Аналогично: безопасный default под NOT NULL (если где-то используется)
+    title: str = Field(default="Уведомление", min_length=1)
+
     url: Optional[str] = None
 
 

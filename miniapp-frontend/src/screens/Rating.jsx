@@ -34,6 +34,16 @@ function normalizeLevelToKey(nameRaw) {
   return "mid";
 }
 
+function normalizeLevelLabel(nameRaw) {
+  const n = normalizeStr(nameRaw).toLowerCase().replace(/\s+/g, "");
+  if (!n) return "—";
+  if (n.includes("нович")) return "Новичок";
+  if (n.includes("средний-") || n.includes("средний−")) return "Средний-";
+  if (n === "средний") return "Средний";
+  if (n.includes("средний+")) return "Средний+";
+  return "—";
+}
+
 function pickPlayerName(p) {
   const fn = normalizeStr(p?.first_name ?? p?.firstName ?? "");
   const ln = normalizeStr(p?.last_name ?? p?.lastName ?? "");
@@ -58,6 +68,10 @@ function pickScore(item) {
   );
 }
 
+function pickCups(item) {
+  return item?.cups ?? item?.cup ?? item?.trophies ?? 0;
+}
+
 function pickLevelNameFromItem(item, levelsById) {
   const id = item?.level_id ?? item?.levelId ?? item?.player_level_id ?? null;
   if (id !== null && id !== undefined) {
@@ -75,7 +89,33 @@ function pickLevelNameFromItem(item, levelsById) {
   return normalizeStr(direct);
 }
 
-export default function Rating({ onOpenPlayer }) {
+function tgUsernamePretty(username) {
+  const u = normalizeStr(username);
+  if (!u) return "";
+  return `@${u.replace(/^@/, "")}`;
+}
+
+function openTelegram(username) {
+  const u = normalizeStr(username).replace(/^@/, "");
+  if (!u) return;
+
+  const url = `https://t.me/${u}`;
+
+  try {
+    const tg = typeof window !== "undefined" ? window.Telegram?.WebApp : null;
+    if (tg?.openTelegramLink) tg.openTelegramLink(url);
+    else if (tg?.openLink) tg.openLink(url);
+    else window.open(url, "_blank", "noopener,noreferrer");
+  } catch {
+    try {
+      window.open(url, "_blank", "noopener,noreferrer");
+    } catch {
+      // ignore
+    }
+  }
+}
+
+export default function Rating() {
   const [activeTab, setActiveTab] = useState("novice");
   const [loading, setLoading] = useState(true);
   const [errorText, setErrorText] = useState("");
@@ -85,6 +125,13 @@ export default function Rating({ onOpenPlayer }) {
   const [me, setMe] = useState(null);
 
   const [hintTabKey, setHintTabKey] = useState(null);
+
+  // Модалка профиля игрока
+  const [playerModalOpen, setPlayerModalOpen] = useState(false);
+  const [playerModalUserId, setPlayerModalUserId] = useState(null);
+  const [playerModalLoading, setPlayerModalLoading] = useState(false);
+  const [playerModalError, setPlayerModalError] = useState("");
+  const [playerModalProfile, setPlayerModalProfile] = useState(null);
 
   useEffect(() => {
     let alive = true;
@@ -119,7 +166,6 @@ export default function Rating({ onOpenPlayer }) {
       } finally {
         if (alive) setLoading(false);
       }
-
     }
 
     load();
@@ -130,12 +176,14 @@ export default function Rating({ onOpenPlayer }) {
   }, []);
 
   const prepared = useMemo(() => {
-    const items = ratings.map((it, idx) => {
-      const player =
-        it?.player ?? it?.user ?? it?.profile ?? it ?? {}; // максимально мягко
+    return (ratings || []).map((it, idx) => {
+      const player = it?.player ?? it?.user ?? it?.profile ?? it ?? {};
       const name = pickPlayerName(player);
       const score = pickScore(it);
-      const levelName = pickLevelNameFromItem(it, levelsById) || pickLevelNameFromItem(player, levelsById);
+      const levelName =
+        pickLevelNameFromItem(it, levelsById) ||
+        pickLevelNameFromItem(player, levelsById);
+
       const levelKey = normalizeLevelToKey(levelName);
 
       return {
@@ -145,31 +193,40 @@ export default function Rating({ onOpenPlayer }) {
         name,
         avatarLetter: pickAvatarLetter(name),
         score: Number(score) || 0,
+        cups: Number(pickCups(it)) || 0,
+        levelName: normalizeStr(levelName),
         levelKey,
       };
     });
-
-    // сортируем по score desc
-    items.sort((a, b) => b.score - a.score);
-
-    // добавляем place (после сортировки)
-    return items.map((x, i) => ({ ...x, place: i + 1 }));
   }, [ratings, levelsById]);
 
+  // ВАЖНО: place считаем ВНУТРИ уровня (как на референсах)
   const filtered = useMemo(() => {
-    return prepared.filter((p) => p.levelKey === activeTab);
+    const list = prepared.filter((p) => p.levelKey === activeTab);
+    list.sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      if (b.cups !== a.cups) return b.cups - a.cups;
+      return String(a.id).localeCompare(String(b.id));
+    });
+    return list.map((x, i) => ({ ...x, place: i + 1 }));
   }, [prepared, activeTab]);
 
   const meView = useMemo(() => {
     if (!me) return null;
+
     const score = pickScore(me);
+    const cups = pickCups(me);
+
     const levelName = pickLevelNameFromItem(me, levelsById);
     const levelKey = normalizeLevelToKey(levelName);
     const tabLabel = LEVEL_TABS.find((t) => t.key === levelKey)?.label || "—";
 
     return {
       score: Number(score) || 0,
+      cups: Number(cups) || 0,
       levelLabel: tabLabel,
+      position: me?.position ?? null,
+      totalUsers: me?.total_users ?? me?.total ?? null,
     };
   }, [me, levelsById]);
 
@@ -183,6 +240,82 @@ export default function Rating({ onOpenPlayer }) {
     }
     return "";
   }, [hintTabKey]);
+
+  function openPlayerModal(userId) {
+    if (!userId) return;
+    setPlayerModalUserId(Number(userId));
+    setPlayerModalOpen(true);
+    setPlayerModalLoading(true);
+    setPlayerModalError("");
+    setPlayerModalProfile(null);
+  }
+
+  function closePlayerModal() {
+    setPlayerModalOpen(false);
+    setPlayerModalUserId(null);
+    setPlayerModalLoading(false);
+    setPlayerModalError("");
+    setPlayerModalProfile(null);
+  }
+
+  useEffect(() => {
+    let alive = true;
+
+    async function loadPublicProfile() {
+      if (!playerModalOpen || !playerModalUserId) return;
+
+      try {
+        setPlayerModalLoading(true);
+        setPlayerModalError("");
+
+        const res = await apiFetch(`/api/v1/profile/${playerModalUserId}`);
+        const prof = res?.item ?? res ?? null;
+
+        if (!alive) return;
+        setPlayerModalProfile(prof);
+      } catch (e) {
+        if (!alive) return;
+        setPlayerModalError(e?.message || "Не удалось загрузить профиль игрока");
+      } finally {
+        if (alive) setPlayerModalLoading(false);
+      }
+    }
+
+    loadPublicProfile();
+
+    return () => {
+      alive = false;
+    };
+  }, [playerModalOpen, playerModalUserId]);
+
+  const playerModalView = useMemo(() => {
+    if (!playerModalProfile) return null;
+
+    const name = pickPlayerName(playerModalProfile);
+    const avatarLetter = pickAvatarLetter(name);
+
+    const lvlRaw =
+      playerModalProfile?.level_name ||
+      levelsById.get(Number(playerModalProfile?.level_id)) ||
+      "";
+    const levelLabel = normalizeLevelLabel(lvlRaw);
+
+    const rating = Number(playerModalProfile?.rating ?? 0) || 0;
+    const cups = Number(playerModalProfile?.cups ?? 0) || 0;
+
+    const username = normalizeStr(playerModalProfile?.username || "");
+    const telegram = tgUsernamePretty(username);
+
+    return {
+      name,
+      avatarLetter,
+      levelLabel,
+      rating,
+      cups,
+      telegram,
+      telegramUsernameRaw: username,
+    };
+  }, [playerModalProfile, levelsById]);
 
   return (
     <div className="screen active">
@@ -239,12 +372,30 @@ export default function Rating({ onOpenPlayer }) {
             <span className="label-muted">Мой уровень</span>
             <span className="label-strong">{meView.levelLabel}</span>
           </div>
-          <div className="label-row" style={{ marginBottom: 0 }}>
+          <div className="label-row">
             <span className="label-muted">Мои очки</span>
             <span className="label-strong" style={{ color: "var(--primary)" }}>
               {meView.score}
             </span>
           </div>
+          <div className="label-row">
+            <span className="label-muted">Мои кубки</span>
+            <span className="label-strong">{meView.cups}</span>
+          </div>
+          {meView.position ? (
+            <div className="label-row" style={{ marginBottom: 0 }}>
+              <span className="label-muted">Моё место</span>
+              <span className="label-strong">
+                {meView.position}
+                {meView.totalUsers ? ` / ${meView.totalUsers}` : ""}
+              </span>
+            </div>
+          ) : (
+            <div className="label-row" style={{ marginBottom: 0 }}>
+              <span className="label-muted">Моё место</span>
+              <span className="label-strong">—</span>
+            </div>
+          )}
         </div>
       ) : null}
 
@@ -263,7 +414,7 @@ export default function Rating({ onOpenPlayer }) {
               className="player-card"
               role="button"
               tabIndex={0}
-              onClick={() => onOpenPlayer?.(p.id)}
+              onClick={() => openPlayerModal(p.id)}
             >
               <div className="player-place">{p.place}</div>
               <div className="player-avatar">{p.avatarLetter}</div>
@@ -295,6 +446,89 @@ export default function Rating({ onOpenPlayer }) {
                 Понятно
               </button>
             </div>
+          </div>
+        </div>
+      ) : null}
+
+      {playerModalOpen ? (
+        <div className="modal-backdrop" onClick={closePlayerModal}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-title">Профиль игрока</div>
+
+            {playerModalLoading ? (
+              <div className="modal-text" style={{ marginTop: 10 }}>
+                Загрузка…
+              </div>
+            ) : null}
+
+            {!playerModalLoading && playerModalError ? (
+              <div className="modal-text" style={{ marginTop: 10, color: "var(--danger)" }}>
+                {playerModalError}
+              </div>
+            ) : null}
+
+            {!playerModalLoading && !playerModalError && playerModalView ? (
+              <>
+                <div className="profile-card" style={{ marginTop: 12, cursor: "default" }}>
+                  <div className="profile-avatar">{playerModalView.avatarLetter}</div>
+
+                  <div className="profile-main">
+                    <div className="profile-name">{playerModalView.name}</div>
+
+                    <div className="profile-sub" style={{ marginTop: 6 }}>
+                      Уровень: <b>{playerModalView.levelLabel}</b>
+                    </div>
+
+                    <div className="details-card" style={{ marginTop: 12 }}>
+                      <div className="label-row">
+                        <span className="label-muted">Рейтинг</span>
+                        <span className="label-strong">{playerModalView.rating}</span>
+                      </div>
+                      <div className="label-row" style={{ marginBottom: 0 }}>
+                        <span className="label-muted">Кубки</span>
+                        <span className="label-strong">{playerModalView.cups}</span>
+                      </div>
+                    </div>
+
+                    {playerModalView.telegram ? (
+                      <div className="details-card" style={{ marginTop: 12 }}>
+                        <div className="label-row" style={{ marginBottom: 0 }}>
+                          <span className="label-muted">Telegram</span>
+                          <span
+                            className="label-strong"
+                            style={{ color: "var(--primary)", cursor: "pointer" }}
+                            onClick={() => openTelegram(playerModalView.telegramUsernameRaw)}
+                            title="Открыть Telegram"
+                          >
+                            {playerModalView.telegram}
+                          </span>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div className="modal-actions">
+                  {playerModalView.telegram ? (
+                    <button
+                      className="primary-btn"
+                      onClick={() => openTelegram(playerModalView.telegramUsernameRaw)}
+                    >
+                      Перейти в Telegram
+                    </button>
+                  ) : null}
+                  <button className="ghost-btn" onClick={closePlayerModal}>
+                    Закрыть
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="modal-actions">
+                <button className="ghost-btn" onClick={closePlayerModal}>
+                  Закрыть
+                </button>
+              </div>
+            )}
           </div>
         </div>
       ) : null}

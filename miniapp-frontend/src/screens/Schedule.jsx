@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch } from "../api";
 import TrainingCard from "../components/TrainingCard";
 
@@ -11,6 +11,29 @@ function pad2(n) {
 
 function dateKeyLocal(d) {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+function startOfDay(d) {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+
+function addDays(d, days) {
+  const x = new Date(d);
+  x.setDate(x.getDate() + days);
+  return x;
+}
+
+function dateFromKey(key) {
+  const m = /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/.exec(String(key || ""));
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const da = Number(m[3]);
+  if (!Number.isFinite(y) || !Number.isFinite(mo) || !Number.isFinite(da)) return null;
+  const dt = new Date(y, mo - 1, da);
+  return Number.isNaN(dt.getTime()) ? null : dt;
 }
 
 function parseStartAt(t) {
@@ -185,21 +208,16 @@ export default function Schedule({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  const today = useMemo(() => new Date(), []);
-  const weekDays = useMemo(() => {
-    const d = new Date(today);
-    const day = d.getDay();
-    const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-    const monday = new Date(d.setDate(diff));
-
-    return Array.from({ length: 7 }, (_, i) => {
-      const x = new Date(monday);
-      x.setDate(monday.getDate() + i);
-      return x;
-    });
+  // Диапазон дат: месяц назад ↔ месяц вперёд (≈ 31 день в каждую сторону)
+  // Визуально календарь не меняем — просто расширяем набор "дней" в горизонтальной ленте.
+  const today = useMemo(() => startOfDay(new Date()), []);
+  const daysRange = useMemo(() => {
+    const start = addDays(today, -31);
+    return Array.from({ length: 63 }, (_, i) => addDays(start, i));
   }, [today]);
 
-  const [selectedDay, setSelectedDay] = useState(() => dateKeyLocal(new Date()));
+  const [selectedDay, setSelectedDay] = useState(() => dateKeyLocal(today));
+  const weekStripRef = useRef(null);
 
   const effectiveRefresh = refreshTick ?? refreshKey ?? 0;
 
@@ -288,9 +306,19 @@ export default function Schedule({
   }, [trainingsFiltered, selectedDay]);
 
   const dayLabel = useMemo(() => {
-    const found = weekDays.find((d) => dateKeyLocal(d) === selectedDay) || new Date();
+    const found = daysRange.find((d) => dateKeyLocal(d) === selectedDay) || dateFromKey(selectedDay) || new Date();
     return capFirst(found.toLocaleDateString("ru-RU", { weekday: "long", day: "numeric", month: "long" }));
-  }, [selectedDay, weekDays]);
+  }, [selectedDay, daysRange]);
+
+  // При выборе даты прокручиваем ленту так, чтобы выбранный день был виден.
+  useEffect(() => {
+    const root = weekStripRef.current;
+    if (!root) return;
+    const btn = root.querySelector(`[data-day="${selectedDay}"]`);
+    if (btn && typeof btn.scrollIntoView === "function") {
+      btn.scrollIntoView({ block: "nearest", inline: "center" });
+    }
+  }, [selectedDay]);
 
   const activeFiltersCount = useMemo(() => {
     if (!filters) return 0;
@@ -318,8 +346,8 @@ export default function Schedule({
         </button>
       </div>
 
-      <div className="week-strip">
-        {weekDays.map((d) => {
+      <div className="week-strip" ref={weekStripRef}>
+        {daysRange.map((d) => {
           const key = dateKeyLocal(d);
           const isSelected = key === selectedDay;
           return (
@@ -328,6 +356,7 @@ export default function Schedule({
               type="button"
               className={`week-day ${isSelected ? "active" : ""}`}
               onClick={() => setSelectedDay(key)}
+              data-day={key}
             >
               <span>{d.toLocaleDateString("ru-RU", { weekday: "short" }).toUpperCase()}</span>
               <span className="date">{d.getDate()}</span>

@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Optional
 
-from pydantic import BaseModel, Field, field_validator, ConfigDict
+from pydantic import BaseModel, Field, field_validator, ConfigDict, AliasChoices
 
 
 class UserProfile(BaseModel):
@@ -12,7 +12,7 @@ class UserProfile(BaseModel):
     Полный профиль пользователя, который отдаём наружу.
     """
     id: int
-    telegram_id: int  # telegram_id ведём как int
+    telegram_id: int
 
     username: Optional[str] = None
     first_name: Optional[str] = None
@@ -31,13 +31,33 @@ class UserProfile(BaseModel):
     payer_id: Optional[str] = None
     card_last4: Optional[str] = None
 
-    # Pydantic v2: разрешаем валидировать объект из атрибутов ORM-модели User
+    model_config = ConfigDict(from_attributes=True)
+
+
+class UserPublicProfile(BaseModel):
+    """
+    Публичный профиль пользователя (для просмотра из рейтинга).
+    Telegram username отдаём только если is_telegram_public=True (или это self).
+    """
+    id: int
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+
+    level_id: Optional[int] = None
+    level_name: Optional[str] = None
+
+    rating: int
+    cups: int
+
+    username: Optional[str] = None
+    is_telegram_public: bool
+
     model_config = ConfigDict(from_attributes=True)
 
 
 class UserProfileUpdate(BaseModel):
     """
-    Тело PATCH /api/v1/profile/me
+    Тело PATCH/PUT /api/v1/profile/me
     Все поля опциональны — передаём только то, что хотим изменить.
     """
 
@@ -49,7 +69,17 @@ class UserProfileUpdate(BaseModel):
     gender: Optional[str] = None  # 'male', 'female', 'other'
     birth_date: Optional[date] = None
     level_id: Optional[int] = None
-    is_telegram_public: Optional[bool] = None
+
+    # ✅ ВАЖНО: принимаем show_telegram как алиас (старое имя из фронта)
+    is_telegram_public: Optional[bool] = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "is_telegram_public",
+            "show_telegram",
+            "telegram_visible",
+            "telegram_public",
+        ),
+    )
 
     @field_validator("gender")
     @classmethod
@@ -61,5 +91,4 @@ class UserProfileUpdate(BaseModel):
             raise ValueError(f"gender must be one of {', '.join(allowed)}")
         return v
 
-    # Запрещаем лишние поля в JSON
     model_config = ConfigDict(extra="forbid")
