@@ -34,23 +34,44 @@ else:
     load_dotenv()
 
 
+def _env_str(name: str, default: str = "") -> str:
+    """
+    Безопасно читает строковую переменную окружения:
+    - если переменная НЕ задана -> default
+    - если переменная задана, но пустая/пробелы -> default
+    """
+    val = os.getenv(name)
+    if val is None:
+        return default
+    val = str(val).strip()
+    return val if val else default
+
+
+def _env_int(name: str, default: int = 0) -> int:
+    val = _env_str(name, str(default))
+    try:
+        return int(val)
+    except ValueError:
+        return default
+
+
+DEFAULT_DATABASE_URL = "postgresql+psycopg2://postgres:postgres@db:5432/volleyball_db"
+
+
 class Settings(BaseModel):
-    project_name: str = os.getenv("PROJECT_NAME", "Volleyball Training API")
-    api_v1_str: str = os.getenv("API_V1_STR", "/api/v1")
-    environment: str = "development"
+    project_name: str = _env_str("PROJECT_NAME", "Volleyball Training API")
+    api_v1_str: str = _env_str("API_V1_STR", "/api/v1")
 
+    # ✅ теперь реально берём из окружения (и не ломаемся на пустом значении)
+    environment: str = _env_str("ENVIRONMENT", "development")
 
-    telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    telegram_webapp_url: str = os.getenv("TELEGRAM_WEBAPP_URL", "")
-    telegram_admin_chat_id: int = int(os.getenv("TELEGRAM_ADMIN_CHAT_ID", "0") or 0)
-    telegram_admin_user_id: int = int(os.getenv("TELEGRAM_ADMIN_USER_ID", "0") or 0)
+    telegram_bot_token: str = _env_str("TELEGRAM_BOT_TOKEN", "")
+    telegram_webapp_url: str = _env_str("TELEGRAM_WEBAPP_URL", "")
+    telegram_admin_chat_id: int = _env_int("TELEGRAM_ADMIN_CHAT_ID", 0)
+    telegram_admin_user_id: int = _env_int("TELEGRAM_ADMIN_USER_ID", 0)
 
-    # 🔥 главное: нормальное значение по умолчанию, чтобы контейнер не падал,
-    # даже если DATABASE_URL не задан
-    database_url: str = os.getenv(
-        "DATABASE_URL",
-        "postgresql+psycopg2://postgres:postgres@db:5432/volleyball_db",
-    )
+    # 🔥 главное: если DATABASE_URL не задан ИЛИ задан как пустая строка -> берём дефолт
+    database_url: str = _env_str("DATABASE_URL", DEFAULT_DATABASE_URL)
 
     # ✅ алиас — чтобы старый код settings.DATABASE_URL НЕ ЛОМАЛСЯ
     @property

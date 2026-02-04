@@ -28,6 +28,7 @@ body {
   background-color: var(--bg);
   color: var(--text-main);
   -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
 }
 
 button, input, select {
@@ -38,11 +39,12 @@ button, input, select {
   max-width: 480px;
   margin: 0 auto;
   min-height: 100vh;
+  min-height: 100dvh;
   background-color: var(--bg);
   display: flex;
   flex-direction: column;
   position: relative;
-  padding-bottom: 80px; /* Отступ под таббар */
+  padding-bottom: calc(80px + env(safe-area-inset-bottom)); /* Отступ под таббар + safe-area */
 }
 
 /* Screens */
@@ -174,7 +176,7 @@ button, input, select {
   width: 36px; height: 36px; border-radius: 999px;
   border: 2px solid #f3f4f6; flex-shrink: 0;
   background-color: #e5e7eb;
-  display: flex; align-items: center; justify-content: center; /* чтобы буква была по центру */
+  display: flex; align-items: center; justify-content: center;
   font-weight: 700;
   color: rgba(17, 24, 39, 0.45);
 }
@@ -223,7 +225,7 @@ button, input, select {
 .settings-label { font-size: 14px; font-weight: 500; color: var(--text-main); }
 .settings-value { font-size: 13px; color: var(--text-muted); }
 
-/* Logout coloring (чтобы не перебивалось settings-label) */
+/* Logout coloring */
 .settings-item.logout { color: var(--danger); }
 .settings-item.logout .settings-label { color: var(--danger); }
 .settings-item.logout .settings-value { color: rgba(255, 77, 79, 0.8); }
@@ -234,7 +236,6 @@ button, input, select {
   padding: 3px; display: flex; align-items: center; transition: background 0.2s;
   cursor: pointer; position: relative;
 }
-/* не display:none, чтобы не ломать клики/доступность в некоторых webview */
 .toggle input {
   position: absolute;
   opacity: 0;
@@ -315,6 +316,7 @@ button, input, select {
 .modal-backdrop {
   position: fixed; inset: 0; background: rgba(15, 23, 42, 0.35);
   display: flex; align-items: flex-end; justify-content: center; z-index: 50;
+  padding-bottom: env(safe-area-inset-bottom);
 }
 .modal {
   width: 100%; max-width: 480px; background-color: #fff;
@@ -334,7 +336,8 @@ button, input, select {
   position: fixed; left: 50%; transform: translateX(-50%); bottom: 0;
   width: 100%; max-width: 480px; background-color: #fff;
   border-top: 1px solid rgba(148, 163, 184, 0.2);
-  padding: 6px 12px 10px; display: flex; justify-content: space-around; z-index: 20;
+  padding: 6px 12px calc(10px + env(safe-area-inset-bottom));
+  display: flex; justify-content: space-around; z-index: 20;
 }
 .tab-btn {
   flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px;
@@ -355,7 +358,13 @@ button, input, select {
 .loader { text-align: center; padding: 20px; color: var(--text-muted); font-weight: 600; }
 
 @media (min-width: 768px) {
-  #app { margin-top: 16px; margin-bottom: 16px; border-radius: 34px; box-shadow: 0 18px 60px rgba(15, 23, 42, 0.18); overflow: hidden; }
+  #app {
+    margin-top: 16px;
+    margin-bottom: 16px;
+    border-radius: 34px;
+    box-shadow: 0 18px 60px rgba(15, 23, 42, 0.18);
+    overflow: hidden;
+  }
   .screen { padding-top: 20px; }
   .hero-image { margin-top: -20px; }
   .tabbar { border-radius: 0 0 34px 34px; }
@@ -370,16 +379,24 @@ button, input, select {
   gap: 10px;
 }
 
+/* ✅ FIX: overlay должен быть full-screen, а не "узкой колонкой" */
 .overlay-screen {
   position: fixed;
   inset: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  max-width: 480px;
   background: var(--bg);
   z-index: 999;
   overflow: auto;
-  padding-bottom: 80px;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: calc(80px + env(safe-area-inset-bottom));
+  display: flex;
+  justify-content: center;
+}
+
+/* Контент оверлея как "телефон" (480px на десктопе, 100% на мобиле) */
+.overlay-content {
+  width: 100%;
+  max-width: 480px;
+  min-height: 100%;
 }
 
 .filters-badge {
@@ -388,7 +405,7 @@ button, input, select {
   height: 22px;
   padding: 0 7px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.22); /* читаемо на синей кнопке */
+  background: rgba(255, 255, 255, 0.22);
   color: #fff;
   display: inline-flex;
   align-items: center;

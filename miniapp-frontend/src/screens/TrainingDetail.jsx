@@ -1,6 +1,29 @@
 import { useEffect, useMemo, useState } from 'react';
 import { apiFetch } from '../api';
 
+/**
+ * Иногда бек отдает UTF-8 байты, но они уже превращены в строку как Latin-1,
+ * поэтому в JS приходит "Ð¢ÐµÑ..." вместо "Тре...".
+ * Эта функция пытается восстановить нормальный UTF-8.
+ */
+function maybeFixUtf8Mojibake(value) {
+  if (value == null) return '';
+  const s = typeof value === 'string' || typeof value === 'number' ? String(value) : '';
+  if (!s) return '';
+  // эвристика: типичные символы кракозябр
+  if (!/[ÐÑ]/.test(s)) return s;
+
+  try {
+    const bytes = new Uint8Array([...s].map((ch) => ch.charCodeAt(0)));
+    const decoded = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+    // если после декода появилась кириллица — значит стало лучше
+    if (/[А-Яа-яЁё]/.test(decoded)) return decoded;
+    return s;
+  } catch {
+    return s;
+  }
+}
+
 function parseDate(value) {
   if (!value) return null;
   const d = new Date(value);
@@ -23,20 +46,44 @@ function toNumber(v) {
 }
 
 function normalizeLocationLabel(loc) {
-  return (loc?.name ?? loc?.title ?? loc?.address ?? '').toString().trim();
+  if (loc == null) return '';
+  if (typeof loc === 'string' || typeof loc === 'number') return maybeFixUtf8Mojibake(loc).trim();
+
+  const raw =
+    loc?.name ??
+    loc?.title ??
+    loc?.label ??
+    loc?.full_address ??
+    loc?.fullAddress ??
+    loc?.address ??
+    loc?.address_text ??
+    loc?.addressText ??
+    '';
+
+  return maybeFixUtf8Mojibake(raw).toString().trim();
+}
+
+function pickFirstNonEmptyString(values) {
+  for (const v of values) {
+    if (v == null) continue;
+    const s = typeof v === 'string' || typeof v === 'number' ? maybeFixUtf8Mojibake(v).trim() : normalizeLocationLabel(v);
+    if (s) return s;
+  }
+  return '';
 }
 
 function parseTierPeople(title) {
   if (!title) return null;
-  const m = String(title).match(/(\d{1,2})/);
+  const t = maybeFixUtf8Mojibake(title);
+  const m = String(t).match(/(\d{1,2})/);
   if (!m) return null;
   const n = Number(m[1]);
   return Number.isFinite(n) ? n : null;
 }
 
 function buildLevelChips(t) {
-  const minLv = (t?.min_level_name ?? '').toString().trim();
-  const maxLv = (t?.max_level_name ?? '').toString().trim();
+  const minLv = maybeFixUtf8Mojibake(t?.min_level_name ?? '').toString().trim();
+  const maxLv = maybeFixUtf8Mojibake(t?.max_level_name ?? '').toString().trim();
   return [minLv, maxLv].filter(Boolean);
 }
 
@@ -93,6 +140,41 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
   const [bookingOpen, setBookingOpen] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
 
+  const openExternalLink = (url) => {
+    if (!url) return;
+    const tg = window?.Telegram?.WebApp;
+    if (tg?.openLink) {
+      try {
+        tg.openLink(url);
+        return;
+      } catch {
+        // fallback ниже
+      }
+    }
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
+  const fetchLocationById = async (locId) => {
+    // ВАЖНО: у тебя НЕТ /api/v1/locations/{id}, поэтому работаем только со списками.
+    // Но сейчас списки возвращают лишь {id}, без name/address/coords — это ограничение бэка/БД.
+    const urls = [
+      '/api/v1/locations?limit=500&offset=0&only_with_trainings=true',
+      '/api/v1/locations?limit=500&offset=0',
+    ];
+
+    for (const url of urls) {
+      try {
+        const locRes = await apiFetch(url);
+        const items = Array.isArray(locRes) ? locRes : Array.isArray(locRes?.items) ? locRes.items : [];
+        const found = items.find((x) => sameId(x?.id ?? x?.location_id ?? x?.locationId, locId));
+        if (found) return found;
+      } catch {
+        // ignore
+      }
+    }
+    return null;
+  };
+
   const load = async () => {
     if (!trainingId) return;
 
@@ -100,31 +182,57 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
       setLoading(true);
       setError('');
 
-      const t = await apiFetch(`/api/v1/trainings/${trainingId}`);
+      const tRaw = await apiFetch(`/api/v1/trainings/${trainingId}`);
 
-      // location label + coords (пытаемся достать из тренировки или из списка локаций)
+      // Чиним потенциальные кракозябры на ключевых текстах
+      const t = {
+        ...tRaw,
+        title: maybeFixUtf8Mojibake(tRaw?.title),
+        description: maybeFixUtf8Mojibake(tRaw?.description),
+        coach_name: maybeFixUtf8Mojibake(tRaw?.coach_name),
+      };
+
       let locLabel = '';
       let locObj = null;
 
+      // 1) Пытаемся достать адрес/название из тренировки (если бек начнет это отдавать)
+      locLabel = pickFirstNonEmptyString([
+        t?.address,
+        t?.location_address,
+        t?.locationAddress,
+        t?.location_name,
+        t?.locationName,
+        t?.location_title,
+        t?.locationTitle,
+        t?.place_name,
+        t?.placeName,
+        t?.place_title,
+        t?.placeTitle,
+        t?.location, // может быть строкой или объектом
+        t?.place, // может быть строкой или объектом
+      ]);
+
+      // 2) Если location/place объектом — сохраняем
       const directLoc = t?.location ?? t?.place ?? null;
       if (directLoc) {
-        locLabel = normalizeLocationLabel(directLoc) || '';
-        locObj = directLoc;
+        const directLabel = normalizeLocationLabel(directLoc);
+        if (directLabel) locLabel = directLabel;
+        if (typeof directLoc === 'object') locObj = directLoc;
       }
 
+      // 3) Если есть location_id — пробуем найти в списке
       const locId = t?.location_id ?? t?.locationId ?? null;
       if (locId != null) {
-        try {
-          const locRes = await apiFetch('/api/v1/locations?limit=500&offset=0&only_with_trainings=true');
-          const items = Array.isArray(locRes) ? locRes : Array.isArray(locRes?.items) ? locRes.items : [];
-          const found = items.find((x) => sameId(x?.id ?? x?.location_id ?? x?.locationId, locId));
-          if (found) {
-            locLabel = normalizeLocationLabel(found) || locLabel || '';
-            locObj = found;
-          }
-        } catch {
-          // ignore
+        const found = await fetchLocationById(locId);
+        if (found) {
+          // сейчас found = {id}, но если позже бек начнет отдавать поля — тут автоматически заработает
+          const lbl = normalizeLocationLabel(found);
+          if (lbl) locLabel = lbl;
+          locObj = found;
         }
+
+        // Если вообще ничего нет — показываем юзер-френдли подпись (но НЕ используем её для карты)
+        if (!locLabel) locLabel = `Локация #${locId}`;
       }
 
       setTraining(t);
@@ -153,13 +261,16 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
     () => parseDate(training?.starts_at ?? training?.start_at ?? training?.startsAt ?? training?.startAt),
     [training],
   );
+
   const duration = useMemo(() => toNumber(training?.duration_minutes ?? training?.durationMinutes) ?? 0, [training]);
+
   const endAt = useMemo(() => {
     if (!startAt || !duration) return null;
     return new Date(startAt.getTime() + duration * 60_000);
   }, [startAt, duration]);
 
   const timePill = useMemo(() => formatTime(startAt), [startAt]);
+
   const timeRange = useMemo(() => {
     if (!startAt) return '';
     const a = formatTime(startAt);
@@ -168,6 +279,7 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
   }, [startAt, endAt]);
 
   const dateLabel = useMemo(() => formatDate(startAt), [startAt]);
+
   const levelChips = useMemo(() => buildLevelChips(training), [training]);
 
   const tiers = useMemo(() => {
@@ -184,6 +296,7 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
   }, [tiers]);
 
   const capacityMain = useMemo(() => toNumber(training?.capacity_main) ?? 0, [training]);
+
   const freePlaces = useMemo(() => {
     const fp = toNumber(training?.free_places);
     if (fp != null) return fp;
@@ -209,6 +322,7 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
   const isReserveAvailable = Boolean(training?.is_reserve_available);
 
   const cancelDeadlineAt = useMemo(() => parseDate(training?.cancel_deadline_at), [training]);
+
   const canCancel = useMemo(() => {
     const apiCan = Boolean(training?.can_cancel);
     if (!apiCan) return false;
@@ -224,7 +338,6 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
 
   // --- Yandex maps widget ---
   const coords = useMemo(() => {
-    // приоритет: тренировка -> locationObj
     const a = extractLatLon(training);
     if (a.lat != null && a.lon != null) return a;
     const b = extractLatLon(locationObj);
@@ -232,33 +345,36 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
     return { lat: null, lon: null };
   }, [training, locationObj]);
 
+  // НЕ пытаемся строить карту по заглушке "Локация #1"
+  const mapTextLabel = useMemo(() => {
+    const s = (locationLabel || '').trim();
+    if (!s) return '';
+    if (/^локац/i.test(s) && /\d+$/.test(s)) return '';
+    return s;
+  }, [locationLabel]);
+
   const yandexMapSrc = useMemo(() => {
-    const label = (locationLabel || '').trim();
     if (coords.lat != null && coords.lon != null) {
-      const ll = `${coords.lon},${coords.lat}`;
-      // pin on map
+      const ll = `${coords.lon},${coords.lat}`; // ll = lon,lat
       return `https://yandex.ru/map-widget/v1/?ll=${encodeURIComponent(ll)}&z=15&pt=${encodeURIComponent(
         ll,
-      )},pm2rdm`;
+      )},pm2rdm&lang=ru_RU`;
     }
-    if (label) {
-      // fallback by address text (если нет координат)
-      return `https://yandex.ru/map-widget/v1/?text=${encodeURIComponent(label)}&z=15`;
+    if (mapTextLabel) {
+      return `https://yandex.ru/map-widget/v1/?text=${encodeURIComponent(mapTextLabel)}&z=15&lang=ru_RU`;
     }
     return '';
-  }, [coords, locationLabel]);
+  }, [coords, mapTextLabel]);
 
   const yandexRouteHref = useMemo(() => {
-    const label = (locationLabel || '').trim();
     if (coords.lat != null && coords.lon != null) {
-      // from "my location" to точка (обычно Яндекс сам запросит геолокацию)
       return `https://yandex.ru/maps/?mode=routes&rtext=~${coords.lat},${coords.lon}&rtt=auto`;
     }
-    if (label) {
-      return `https://yandex.ru/maps/?mode=routes&rtext=~${encodeURIComponent(label)}&rtt=auto`;
+    if (mapTextLabel) {
+      return `https://yandex.ru/maps/?mode=routes&rtext=~${encodeURIComponent(mapTextLabel)}&rtt=auto`;
     }
     return '';
-  }, [coords, locationLabel]);
+  }, [coords, mapTextLabel]);
 
   const enrollButtonLabel = useMemo(() => {
     if (isEnrolled) return 'Отменить запись';
@@ -395,7 +511,7 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
                 <ul className="details-list">
                   {tiers.map((x) => (
                     <li key={x?.id ?? x?.title}>
-                      {x?.title} — {Math.round(toNumber(x?.price) ?? 0)} ₽
+                      {maybeFixUtf8Mojibake(x?.title)} — {Math.round(toNumber(x?.price) ?? 0)} ₽
                     </li>
                   ))}
                 </ul>
@@ -435,24 +551,32 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
                       height="240"
                       frameBorder="0"
                       style={{ display: 'block' }}
+                      loading="lazy"
+                      referrerPolicy="no-referrer-when-downgrade"
                       allowFullScreen
                     />
                   </div>
 
                   {yandexRouteHref ? (
                     <div style={{ marginTop: 10 }}>
-                      <a
-                        className="secondary-btn"
-                        href={yandexRouteHref}
-                        target="_blank"
-                        rel="noreferrer"
-                        style={{ display: 'inline-flex', justifyContent: 'center', width: '100%' }}
+                      <button
+                        className="primary-btn"
+                        type="button"
+                        onClick={() => openExternalLink(yandexRouteHref)}
+                        style={{ width: '100%' }}
                       >
                         Построить маршрут
-                      </a>
+                      </button>
                     </div>
                   ) : null}
                 </div>
+              ) : null}
+
+              {!yandexMapSrc ? (
+                <p className="details-note" style={{ marginTop: 10 }}>
+                  Карта появится, когда в API локаций/тренировок будут передаваться адрес или координаты (сейчас в БД
+                  locations только id).
+                </p>
               ) : null}
 
               <p className="details-note">

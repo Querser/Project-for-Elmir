@@ -98,8 +98,17 @@ export default function App() {
 
   const bumpRefresh = () => setRefreshTick((x) => x + 1);
 
+  // ВАЖНО: это “страховка”, если где-то в App.css/других стилях остались сломанные правила
+  // (left:50% / transform / max-width). Inline победит любой css.
+  const overlayStyleFix = {
+    left: 0,
+    right: 0,
+    transform: 'none',
+    maxWidth: 'none',
+  };
+
   return (
-    <div className="app">
+    <div className="app" id="app">
       <div className="screen-container">
         {activeTab === TAB_SCHEDULE && (
           <div className="screen active" id="screen-home">
@@ -138,31 +147,37 @@ export default function App() {
       <TabBar active={activeTab} onChange={setActiveTab} />
 
       {overlay.type === 'filters' ? (
-        <div className="overlay-screen">
-          <Filters
-            initialFilters={filters}
-            onApply={(next) => {
-              setFilters(next);
-              closeOverlay();
-            }}
-            onBack={closeOverlay}
-          />
+        <div className="overlay-screen" style={overlayStyleFix}>
+          <div className="overlay-content">
+            <Filters
+              initialFilters={filters}
+              onApply={(next) => {
+                setFilters(next);
+                closeOverlay();
+              }}
+              onBack={closeOverlay}
+            />
+          </div>
         </div>
       ) : null}
 
       {overlay.type === 'training' ? (
-        <div className="overlay-screen">
-          <TrainingDetail
-            trainingId={overlay.payload?.trainingId}
-            onBack={closeOverlay}
-            onChanged={() => bumpRefresh()}
-          />
+        <div className="overlay-screen" style={overlayStyleFix}>
+          <div className="overlay-content">
+            <TrainingDetail
+              trainingId={overlay.payload?.trainingId}
+              onBack={closeOverlay}
+              onChanged={() => bumpRefresh()}
+            />
+          </div>
         </div>
       ) : null}
 
       {overlay.type === 'profile' ? (
-        <div className="overlay-screen">
-          <Profile onBack={closeOverlay} />
+        <div className="overlay-screen" style={overlayStyleFix}>
+          <div className="overlay-content">
+            <Profile onBack={closeOverlay} />
+          </div>
         </div>
       ) : null}
     </div>

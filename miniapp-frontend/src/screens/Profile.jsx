@@ -56,13 +56,15 @@ export default function Profile({ onBack }) {
   const [ratingMe, setRatingMe] = useState(null);
 
   const [editOpen, setEditOpen] = useState(false);
+  const [tgSaving, setTgSaving] = useState(false);
+
   const [form, setForm] = useState({
     first_name: "",
     last_name: "",
     phone: "",
     gender: "male",
     birth_date: "",
-    show_telegram: true, // UI-имя, на бэк уходит как is_telegram_public
+    show_telegram: true,
   });
 
   useEffect(() => {
@@ -95,8 +97,6 @@ export default function Profile({ onBack }) {
           phone: normalizeStr(p?.phone ?? ""),
           gender: normalizeStr(p?.gender ?? p?.sex ?? "male") || "male",
           birth_date: normalizeStr(p?.birth_date ?? p?.birthDate ?? ""),
-          // ВАЖНО: читаем именно is_telegram_public (как на бэке),
-          // но оставляем в UI-форме show_telegram.
           show_telegram: Boolean(
             p?.is_telegram_public ??
               p?.show_telegram ??
@@ -106,7 +106,6 @@ export default function Profile({ onBack }) {
           ),
         });
 
-        // если профиль не заполнен — открываем редактирование
         const need =
           !normalizeStr(p?.phone) ||
           !normalizeStr(p?.birth_date ?? p?.birthDate) ||
@@ -159,13 +158,35 @@ export default function Profile({ onBack }) {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
+  async function saveTelegramVisibility(nextValue) {
+    const prev = Boolean(form.show_telegram);
+    setField("show_telegram", nextValue);
+    setErrorText("");
+    setTgSaving(true);
+
+    try {
+      const res = await apiFetch("/api/v1/profile/me", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          is_telegram_public: Boolean(nextValue),
+        }),
+      });
+
+      const p = res?.item ?? res ?? null;
+      if (p) setProfile(p);
+    } catch (err) {
+      setField("show_telegram", prev);
+      setErrorText(err?.message || "Не удалось сохранить настройки Telegram");
+    } finally {
+      setTgSaving(false);
+    }
+  }
+
   async function saveProfile() {
     setErrorText("");
 
     try {
-      // КЛЮЧЕВОЙ ФИКС 422:
-      // - не шлём пустую строку в birth_date (date-поле)
-      // - не шлём лишнее show_telegram (на бэке is_telegram_public)
       const payload = {
         first_name: normalizeStr(form.first_name),
         last_name: normalizeStr(form.last_name),
@@ -175,21 +196,20 @@ export default function Profile({ onBack }) {
         is_telegram_public: Boolean(form.show_telegram),
       };
 
-      // убираем пустые строки, чтобы FastAPI/Pydantic не ловил date=""
       Object.keys(payload).forEach((k) => {
         if (payload[k] === "" || payload[k] === null || payload[k] === undefined) {
           delete payload[k];
         }
       });
 
-      const updated = await apiFetch("/api/v1/profile/me", {
+      const res = await apiFetch("/api/v1/profile/me", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
 
-      const p = updated?.item ?? updated ?? null;
-      setProfile(p);
+      const p = res?.item ?? res ?? null;
+      if (p) setProfile(p);
       setEditOpen(false);
     } catch (err) {
       setErrorText(err?.message || "Ошибка сохранения профиля");
@@ -197,130 +217,100 @@ export default function Profile({ onBack }) {
   }
 
   const tgName = useMemo(() => {
-    const u = normalizeStr(profile?.username ?? "");
-    const t = normalizeStr(profile?.tg_username ?? "");
-    const best = u || t;
-    return best ? `@${best.replace(/^@/, "")}` : "—";
+    const u = normalizeStr(profile?.tg_username ?? profile?.username ?? "");
+    return u ? `@${u.replace(/^@/, "")}` : "—";
   }, [profile]);
 
   return (
-    <div className="screen active">
-      <div className="topbar">
-        <button className="back-btn" onClick={() => (onBack ? onBack() : null)}>
-          <svg viewBox="0 0 24 24">
-            <path
-              d="M15 18l-6-6 6-6"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
+    <>
+      <header className="topbar">
+        <button type="button" className="back-btn" onClick={onBack} aria-label="Назад">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M15 18l-6-6 6-6" />
           </svg>
         </button>
-        <h1 className="topbar-title" style={{ fontSize: 22 }}>
-          Профиль
-        </h1>
-        <div style={{ width: 40 }} />
-      </div>
+        <h1 className="topbar-title">Мой профиль</h1>
+        <div style={{ width: 36 }} />
+      </header>
 
       {loading ? <div className="loader">Загрузка…</div> : null}
 
       {!loading && errorText ? (
-        <div className="empty-state">
-          <span className="empty-ico">⚠️</span>
-          Ошибка
-          <div style={{ marginTop: 6 }}>{errorText}</div>
+        <div className="empty-state" style={{ marginTop: 18 }}>
+          <div className="empty-ico">⚠️</div>
+          <h3>Ошибка</h3>
+          <p>{errorText}</p>
         </div>
       ) : null}
 
-      {!loading && !errorText && profile ? (
+      {!loading && profile ? (
         <>
-          <div className="profile-card" style={{ cursor: "default" }}>
-            <div className="profile-avatar">{name?.[0]?.toUpperCase() || "•"}</div>
+          <section className="profile-card">
+            <div className="profile-top">
+              <div className="avatar-lg" />
+              <div className="profile-main">
+                <div className="profile-name">{name}</div>
 
-            <div className="profile-main">
-              <div className="profile-name">{name}</div>
+                <div className="profile-sub" style={{ marginTop: 6 }}>
+                  Уровень: <b>{levelName}</b>
+                </div>
 
-              <div className="profile-sub" style={{ marginTop: 6 }}>
-                Уровень: <b>{levelName}</b>
-              </div>
+                <div className="details-card" style={{ marginTop: 12 }}>
+                  <div className="label-row">
+                    <span className="label-muted">Рейтинг игрока</span>
+                    <span className="label-strong">{ratingPoints} очков</span>
+                  </div>
+                  <div className="label-row">
+                    <span className="label-muted">Пол</span>
+                    <span className="label-strong">{pickGender(profile)}</span>
+                  </div>
+                  <div className="label-row">
+                    <span className="label-muted">Дата рождения</span>
+                    <span className="label-strong">
+                      {formatDateRu(profile?.birth_date ?? profile?.birthDate)}
+                    </span>
+                  </div>
+                  <div className="label-row" style={{ marginBottom: 0 }}>
+                    <span className="label-muted">Телефон</span>
+                    <span className="label-strong">
+                      {normalizeStr(profile?.phone) || "—"}
+                    </span>
+                  </div>
+                </div>
 
-              <div className="details-card" style={{ marginTop: 12 }}>
-                <div className="label-row">
-                  <span className="label-muted">Рейтинг игрока</span>
-                  <span className="label-strong">{ratingPoints} очков</span>
-                </div>
-                <div className="label-row">
-                  <span className="label-muted">Пол</span>
-                  <span className="label-strong">{pickGender(profile)}</span>
-                </div>
-                <div className="label-row">
-                  <span className="label-muted">Дата рождения</span>
-                  <span className="label-strong">
-                    {formatDateRu(profile?.birth_date ?? profile?.birthDate)}
-                  </span>
-                </div>
-                <div className="label-row" style={{ marginBottom: 0 }}>
-                  <span className="label-muted">Телефон</span>
-                  <span className="label-strong">
-                    {normalizeStr(profile?.phone) || "—"}
-                  </span>
-                </div>
-              </div>
-
-              <div className="settings-list" style={{ marginTop: 12 }}>
-                <div className="settings-item" style={{ cursor: "default" }}>
-                  <div className="settings-item-left">
-                    <div
-                      className="settings-icon"
-                      style={{ background: "rgba(47, 125, 246, 0.12)" }}
-                    >
-                      ✈️
+                <div className="settings-list" style={{ marginTop: 12 }}>
+                  <div className="settings-item" style={{ cursor: "default" }}>
+                    <div className="settings-item-left">
+                      <div className="settings-icon" style={{ background: "rgba(47, 125, 246, 0.12)" }}>
+                        ✈️
+                      </div>
+                      <div>
+                        <div className="settings-label">Telegram</div>
+                        <div className="settings-value">{tgName}</div>
+                      </div>
                     </div>
-                    <div>
-                      <div className="settings-label">Telegram</div>
-                      <div className="settings-value">{tgName}</div>
-                    </div>
+
+                    <label className="toggle" title="Разрешить переход по Telegram">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(form.show_telegram)}
+                        disabled={tgSaving}
+                        onChange={(ev) => saveTelegramVisibility(ev.target.checked)}
+                      />
+                      <span className="toggle-circle" />
+                    </label>
                   </div>
 
-                  <label className="toggle" title="Разрешить переход по Telegram">
-                    <input
-                      type="checkbox"
-                      checked={Boolean(form.show_telegram)}
-                      onChange={(ev) => setField("show_telegram", ev.target.checked)}
-                    />
-                    <span className="toggle-circle" />
-                  </label>
-                </div>
-
-                <div className="modal-text" style={{ marginTop: 8, opacity: 0.75 }}>
-                  Если выключить — другие игроки не смогут перейти к тебе в Telegram из рейтинга.
+                  <div className="modal-text" style={{ marginTop: 8, opacity: 0.75 }}>
+                    Если выключить — другие игроки не смогут перейти к тебе в Telegram из рейтинга.
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
+          </section>
 
           <button className="primary-btn" onClick={() => setEditOpen(true)}>
             Редактировать профиль
-          </button>
-
-          <button
-            className="ghost-btn"
-            onClick={async () => {
-              try {
-                await apiFetch("/api/v1/profile/me", {
-                  method: "PATCH",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    is_telegram_public: Boolean(form.show_telegram),
-                  }),
-                });
-              } catch {
-                // ignore
-              }
-            }}
-            style={{ marginTop: 10 }}
-          >
-            Сохранить настройки Telegram
           </button>
         </>
       ) : null}
@@ -386,37 +376,20 @@ export default function Profile({ onBack }) {
                   onChange={(ev) => setField("birth_date", ev.target.value)}
                 />
               </div>
-
-              <div className="field" style={{ gridColumn: "1 / -1" }}>
-                <div className="field-label">Разрешить переход по Telegram</div>
-                <label className="toggle">
-                  <input
-                    type="checkbox"
-                    checked={Boolean(form.show_telegram)}
-                    onChange={(ev) => setField("show_telegram", ev.target.checked)}
-                  />
-                  <span className="toggle-circle" />
-                </label>
-              </div>
             </div>
 
-            {errorText ? (
-              <div className="modal-text" style={{ color: "var(--danger)" }}>
-                {errorText}
-              </div>
-            ) : null}
-
-            <div className="modal-actions">
-              <button className="primary-btn" onClick={saveProfile}>
-                Сохранить
-              </button>
-              <button className="ghost-btn" onClick={() => setEditOpen(false)}>
+            <div className="actions" style={{ marginTop: 14 }}>
+              <button type="button" className="secondary-btn" onClick={() => setEditOpen(false)}>
                 Отмена
+              </button>
+
+              <button type="button" className="primary-btn" onClick={saveProfile}>
+                Сохранить
               </button>
             </div>
           </div>
         </div>
       ) : null}
-    </div>
+    </>
   );
 }

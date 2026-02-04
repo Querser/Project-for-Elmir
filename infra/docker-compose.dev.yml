@@ -24,14 +24,15 @@ services:
     container_name: volleyball_backend
     environment:
       # --- DB ---
-      DATABASE_URL: ${DATABASE_URL}
+      # КЛЮЧЕВОЕ: если DATABASE_URL не задан или пустой -> берём рабочий дефолт
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://postgres:postgres@db:5432/volleyball_db}
 
       # --- Общие ---
       ENVIRONMENT: ${ENVIRONMENT:-development}
 
       # --- Telegram ---
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
-      TELEGRAM_WEBAPP_URL: ${TELEGRAM_WEBAPP_URL}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_WEBAPP_URL: ${TELEGRAM_WEBAPP_URL:-http://localhost:8081/}
 
       # --- DEV auth (чтобы работали X-User-Id / X-Telegram-Id без initData) ---
       ALLOW_INSECURE_HEADER_AUTH: ${ALLOW_INSECURE_HEADER_AUTH:-1}
@@ -41,8 +42,8 @@ services:
       DEV_ADMIN_TELEGRAM_IDS: ${DEV_ADMIN_TELEGRAM_IDS:-1726307767}
 
       # --- Payments (если backend реально читает их из env) ---
-      PAYMENT_PROVIDER_KEY: ${PAYMENT_PROVIDER_KEY}
-      PAYMENT_PROVIDER_SECRET: ${PAYMENT_PROVIDER_SECRET}
+      PAYMENT_PROVIDER_KEY: ${PAYMENT_PROVIDER_KEY:-}
+      PAYMENT_PROVIDER_SECRET: ${PAYMENT_PROVIDER_SECRET:-}
 
       # --- Postgres vars (опционально, но удобно иметь внутри backend) ---
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
@@ -67,7 +68,7 @@ services:
     container_name: volleyball_miniapp
     environment:
       ENVIRONMENT: ${ENVIRONMENT:-development}
-      TELEGRAM_WEBAPP_URL: ${TELEGRAM_WEBAPP_URL}
+      TELEGRAM_WEBAPP_URL: ${TELEGRAM_WEBAPP_URL:-http://localhost:8081/}
       BACKEND_PORT: ${BACKEND_PORT:-8001}
     ports:
       - "8081:80"

@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass
 from typing import Generator, Optional, Union
 from urllib.parse import parse_qsl
@@ -143,44 +144,70 @@ def _parse_tg_user_from_init_data(init_data_pairs: dict) -> TgWebAppUser:
 # -----------------------------
 # Helpers: env parsing / dev-mode
 # -----------------------------
+def _strip_wrapping_quotes(value: str) -> str:
+    """
+    Снимаем внешние кавычки ПОВТОРНО:
+      "'172'" -> 172
+      "\"172\"" -> 172
+      " '172' " -> 172
+    """
+    v = (value or "").strip()
+    while len(v) >= 2 and v[0] == v[-1] and v[0] in {"'", '"'}:
+        v = v[1:-1].strip()
+    return v
+
+
 def _env_truthy(name: str, default: bool = False) -> bool:
     v = os.getenv(name)
     if v is None:
         return default
-    v = v.strip().lower()
+    v = _strip_wrapping_quotes(v).strip().lower()
     return v in {"1", "true", "yes", "y", "on"}
 
 
 def _env_is_dev_environment() -> bool:
-    env = (os.getenv("ENVIRONMENT") or "").strip().lower()
+    env = _strip_wrapping_quotes(os.getenv("ENVIRONMENT") or "").strip().lower()
     return env in {"dev", "development", "local"}
 
 
 def _allow_insecure_header_auth() -> bool:
-    # 1) явный флаг
     if "ALLOW_INSECURE_HEADER_AUTH" in os.environ:
         return _env_truthy("ALLOW_INSECURE_HEADER_AUTH", default=False)
 
-    # 2) твой флаг дев-режима
     if _env_truthy("DEV_AUTO_CREATE_USER_FROM_HEADER", default=False):
         return True
 
-    # 3) по окружению
     if _env_is_dev_environment():
         return True
 
     return False
 
 
+def _get_dev_default_telegram_id() -> Optional[int]:
+    raw = os.getenv("DEV_DEFAULT_TELEGRAM_ID")
+    if raw is None:
+        return None
+    raw = _strip_wrapping_quotes(str(raw))
+    if not raw:
+        return None
+
+    # допускаем только целое число (обычно положительное)
+    if not re.fullmatch(r"-?\d+", raw):
+        # логируем только реальную ошибку, а не кавычки
+        log.error("DEV_DEFAULT_TELEGRAM_ID is set but invalid: %r", raw)
+        return None
+
+    try:
+        return int(raw)
+    except Exception:
+        log.error("DEV_DEFAULT_TELEGRAM_ID is set but invalid: %r", raw)
+        return None
+
+
 def _dev_mode_enabled() -> bool:
-    """
-    БОлее "железный" dev-mode:
-    - любой из флагов allow insecure
-    - или задан DEV_DEFAULT_TELEGRAM_ID (это явно dev-настройка)
-    """
     if _allow_insecure_header_auth():
         return True
-    if (os.getenv("DEV_DEFAULT_TELEGRAM_ID") or "").strip():
+    if _get_dev_default_telegram_id() is not None:
         return True
     return False
 
@@ -197,11 +224,11 @@ def _parse_user_id(value: str) -> Union[int, UUID]:
     value = value.strip()
     if value.isdigit():
         return int(value)
-    return UUID(value)  # может бросить ValueError — это ок, выше ловим
+    return UUID(value)
 
 
 def _parse_int(value: str) -> int:
-    return int(value.strip())
+    return int(_strip_wrapping_quotes(value).strip())
 
 
 # -----------------------------
@@ -248,18 +275,14 @@ def _get_user_by_telegram_id(db: Session, telegram_id: int) -> Optional[User]:
 
 
 # -----------------------------
-# Dependency: require initData OR dev header (если захотите вешать на роутеры)
+# Dependency: require initData OR dev header
 # -----------------------------
 def require_telegram_init_data_or_dev_header(request: Request) -> None:
-    """
-    PROD: строго требуем X-Telegram-Init-Data
-    DEV: разрешаем X-Telegram-Id / X-User-Id / DEV_DEFAULT_TELEGRAM_ID
-    """
     if _get_header(request, "X-Telegram-Init-Data"):
         return
 
     if _dev_mode_enabled():
-        if _get_header(request, "X-Telegram-Id") or _get_header(request, "X-User-Id") or (os.getenv("DEV_DEFAULT_TELEGRAM_ID") or "").strip():
+        if _get_header(request, "X-Telegram-Id") or _get_header(request, "X-User-Id") or (_get_dev_default_telegram_id() is not None):
             return
 
     raise unauthorized("Пользователь не авторизован через Telegram", required_header="X-Telegram-Init-Data")
@@ -272,15 +295,6 @@ def get_current_user(
     request: Request,
     db: Session = Depends(get_db),
 ) -> User:
-    """
-    Авторизация:
-    - Если есть X-Telegram-Init-Data -> проверяем Telegram initData
-    - Иначе DEV:
-        * X-User-Id -> ищем по id
-        * X-Telegram-Id -> ищем/создаём по telegram_id
-        * DEV_DEFAULT_TELEGRAM_ID -> ищем/создаём по telegram_id
-    - Иначе -> 401 требуем initData
-    """
     try:
         init_data = _get_header(request, "X-Telegram-Init-Data")
         if init_data:
@@ -302,7 +316,7 @@ def get_current_user(
 
                 user = _get_user_by_id(db, user_id)
                 if not user:
-                    raise unauthorized("Unauthorized: user not found for X-User-Id", required_header="X-User-Id")
+                    raise unauthorized("Unauthorized: user not found for X-User- Plains header", required_header="X-User-Id")
                 return user
 
             tg_id_raw = _get_header(request, "X-Telegram-Id")
@@ -317,12 +331,9 @@ def get_current_user(
                     return user
                 return _get_or_create_user_by_telegram(db, TgWebAppUser(telegram_id=tg_id))
 
-            default_tg = (os.getenv("DEV_DEFAULT_TELEGRAM_ID") or "").strip()
-            if default_tg:
-                try:
-                    return _get_or_create_user_by_telegram(db, TgWebAppUser(telegram_id=int(default_tg)))
-                except Exception:
-                    log.exception("DEV_DEFAULT_TELEGRAM_ID is set but invalid: %r", default_tg)
+            default_tg_id = _get_dev_default_telegram_id()
+            if default_tg_id is not None:
+                return _get_or_create_user_by_telegram(db, TgWebAppUser(telegram_id=default_tg_id))
 
             raise unauthorized("Unauthorized: provide X-User-Id, X-Telegram-Id or X-Telegram-Init-Data header")
 
@@ -332,7 +343,6 @@ def get_current_user(
     except HTTPException:
         raise
     except Exception as e:
-        # чтобы не было "Empty reply from server"
         log.exception("Unhandled error in get_current_user: %s", e)
         raise internal_error("Ошибка авторизации (см. логи backend)")
 
@@ -345,9 +355,8 @@ def get_current_user_optional(
     user_id_raw = _get_header(request, "X-User-Id")
     tg_id_raw = _get_header(request, "X-Telegram-Id")
 
-    # если в dev включён дефолтный tg — можно отдавать пользователя даже без заголовков
     if not init_data and not user_id_raw and not tg_id_raw:
-        if _dev_mode_enabled() and (os.getenv("DEV_DEFAULT_TELEGRAM_ID") or "").strip():
+        if _dev_mode_enabled() and (_get_dev_default_telegram_id() is not None):
             return get_current_user(request=request, db=db)
         return None
 
@@ -366,10 +375,10 @@ def _is_admin_user(user: User) -> bool:
         if isinstance(role, str) and role.lower() in {"admin", "superadmin"}:
             return True
 
-    raw = (os.getenv("DEV_ADMIN_TELEGRAM_IDS") or "").strip()
+    raw = _strip_wrapping_quotes((os.getenv("DEV_ADMIN_TELEGRAM_IDS") or "").strip())
     if raw and hasattr(user, "telegram_id") and getattr(user, "telegram_id", None) is not None:
         try:
-            allowed = {int(x.strip()) for x in raw.split(",") if x.strip()}
+            allowed = {int(_strip_wrapping_quotes(x.strip())) for x in raw.split(",") if x.strip()}
             return int(user.telegram_id) in allowed
         except Exception:
             return False
@@ -385,5 +394,4 @@ def get_current_admin_user(
     return user
 
 
-# Совместимость с текущими импортами проекта:
 require_admin = get_current_admin_user
