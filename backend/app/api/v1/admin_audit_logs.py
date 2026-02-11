@@ -1,17 +1,12 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_db
-
-try:
-    from app.core.deps import require_admin
-except ImportError:  # fallback
-    from app.core.deps import get_current_admin_user as require_admin  # type: ignore
-
+from app.core.deps import get_current_admin_user_any, get_db
 from app.schemas.audit_log import AuditLogListResponse, AuditLogResponse
 from app.services.audit_log_service import list_audit_logs
 
@@ -38,8 +33,11 @@ def admin_audit_logs_list(
     action: str | None = None,
     entity: str | None = None,
     entity_id: int | None = None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    training_id: int | None = None,
     db: Session = Depends(get_db),
-    _admin: Any = Depends(require_admin),
+    _admin: Any = Depends(get_current_admin_user_any),
 ):
     items, total = list_audit_logs(
         db,
@@ -49,6 +47,9 @@ def admin_audit_logs_list(
         action=action,
         entity=entity,
         entity_id=entity_id,
+        date_from=date_from,
+        date_to=date_to,
+        training_id=training_id,
     )
 
     dto_items = [_to_schema(AuditLogResponse, x) for x in items]

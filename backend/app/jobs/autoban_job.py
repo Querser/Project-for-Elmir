@@ -18,7 +18,7 @@ def _debt_is_open(d: Any) -> bool:
     st = getattr(d, "status", None)
     if st is None:
         return True
-    s = str(st).lower()
+    s = str(getattr(st, "value", st)).lower()
     return s in {"open", "unpaid", "created", "pending"}
 
 
@@ -53,7 +53,12 @@ def run_autoban_job(db: Session) -> dict[str, int]:
         if now <= start_at <= horizon:
             try:
                 from app.services.ban_service import ensure_auto_debt_ban  # type: ignore
-                ensure_auto_debt_ban(db, user_id=user_id, training_id=training_id)
+                ensure_auto_debt_ban(
+                    db,
+                    user_id=user_id,
+                    training_id=training_id,
+                    reason=f"Невыплаченный долг по тренировке #{training_id}",
+                )
                 affected += 1
             except Exception:
                 # если ban_service не импортируется — просто пропускаем

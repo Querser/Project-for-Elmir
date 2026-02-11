@@ -1,4 +1,4 @@
-# backend/app/schemas/training.py
+﻿# backend/app/schemas/training.py
 from __future__ import annotations
 
 from datetime import datetime
@@ -9,99 +9,98 @@ from pydantic import BaseModel, Field, field_validator
 
 class TrainingBase(BaseModel):
     """
-    Базовые поля тренировки – общие для создания и чтения.
+    Базовые поля тренировки - общие для создания и чтения.
     """
 
-    title: str = Field(..., max_length=100, description="Название / тип тренировки")
+    title: str = Field(..., max_length=100, description='Название / тип тренировки')
     description: Optional[str] = Field(
         default=None,
         max_length=500,
-        description="Краткое описание",
+        description='Краткое описание',
     )
 
-    start_at: datetime = Field(..., description="Дата и время начала (ISO)")
+    start_at: datetime = Field(..., description='Дата и время начала (ISO)')
     duration_minutes: int = Field(
         default=90,
         ge=1,
         le=600,
-        description="Длительность тренировки в минутах",
+        description='Длительность тренировки в минутах',
     )
 
     min_level_name: Optional[str] = Field(
         default=None,
         max_length=50,
-        description="Минимальный уровень допуска (строка, например L3)",
+        description='Минимальный уровень допуска (например L3)',
     )
     max_level_name: Optional[str] = Field(
         default=None,
         max_length=50,
-        description="Максимальный уровень допуска (строка, например L6)",
+        description='Максимальный уровень допуска (например L6)',
     )
 
     price: float = Field(
         default=0,
         ge=0,
-        description="Стоимость тренировки",
+        description='Стоимость тренировки',
     )
 
     capacity_main: int = Field(
         default=12,
         ge=0,
         le=1000,
-        description="Лимит мест в основе",
+        description='Лимит мест в основе',
     )
     capacity_reserve: int = Field(
         default=4,
         ge=0,
         le=1000,
-        description="Лимит мест в резерве",
+        description='Лимит мест в резерве',
     )
 
     coach_name: Optional[str] = Field(
         default=None,
         max_length=100,
-        description="Имя тренера",
+        description='Имя тренера',
     )
 
     image_url: Optional[str] = Field(
         default=None,
         max_length=255,
-        description="URL фото площадки / тренировки",
+        description='URL фото площадки / тренировки',
     )
     video_url: Optional[str] = Field(
         default=None,
         max_length=255,
-        description="URL видео (обзор, разбор и т.п.)",
+        description='URL видео (обзор, разбор и т.п.)',
     )
 
     location_id: Optional[int] = Field(
         default=None,
-        description="ID Location (если есть)",
+        description='ID Location (если уже существует)',
+    )
+    location_name: Optional[str] = Field(
+        default=None,
+        max_length=120,
+        description='Название локации; если нет в БД, будет создана автоматически',
     )
 
-    @field_validator("price")
+    @field_validator('price')
     @classmethod
     def validate_price(cls, v: float) -> float:
         if v < 0:
-            raise ValueError("price must be >= 0")
-        # округляем до двух знаков, чтобы не было странных хвостов
+            raise ValueError('price must be >= 0')
         return round(v, 2)
 
 
 class TrainingCreate(TrainingBase):
     """
     Тело POST /api/v1/trainings (админ).
-    Наследуем все поля, но start_at и title обязательны.
     """
-
-    # title и start_at уже обязательны в TrainingBase, поэтому здесь ничего добавлять не нужно
-    pass
 
 
 class TrainingUpdate(BaseModel):
     """
     Тело PATCH /api/v1/trainings/{id} (админ).
-    Все поля опциональны – меняем только то, что прислали.
     """
 
     title: Optional[str] = Field(default=None, max_length=100)
@@ -124,14 +123,15 @@ class TrainingUpdate(BaseModel):
     video_url: Optional[str] = Field(default=None, max_length=255)
 
     location_id: Optional[int] = None
+    location_name: Optional[str] = Field(default=None, max_length=120)
 
     is_cancelled: Optional[bool] = Field(
         default=None,
-        description="Флаг отмены; обычно лучше использовать отдельный endpoint /cancel",
+        description='Флаг отмены; обычно лучше использовать отдельный endpoint /cancel',
     )
 
     class Config:
-        extra = "forbid"
+        extra = 'forbid'
 
 
 class TrainingPublic(BaseModel):
@@ -164,5 +164,4 @@ class TrainingPublic(BaseModel):
     is_cancelled: bool
 
     class Config:
-        # важное – говорим pydantic, что можно валидировать ORM-объекты
         from_attributes = True

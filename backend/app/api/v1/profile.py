@@ -97,6 +97,7 @@ def get_public_profile(
 
     payload = UserPublicProfile(
         id=user.id,
+        avatar_url=getattr(user, "avatar_url", None),
         first_name=user.first_name,
         last_name=user.last_name,
         level_id=user.level_id,

@@ -42,6 +42,7 @@ class User(Base):
         index=True,
     )
     username: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    avatar_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
 
     # Имя / фамилия
     first_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)

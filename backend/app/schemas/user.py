@@ -15,6 +15,7 @@ class UserProfile(BaseModel):
     telegram_id: int
 
     username: Optional[str] = None
+    avatar_url: Optional[str] = None
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     phone: Optional[str] = None
@@ -40,6 +41,7 @@ class UserPublicProfile(BaseModel):
     Telegram username отдаём только если is_telegram_public=True (или это self).
     """
     id: int
+    avatar_url: Optional[str] = None
     first_name: Optional[str] = None
     last_name: Optional[str] = None
 

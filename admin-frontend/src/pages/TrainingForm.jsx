@@ -1,0 +1,511 @@
+﻿import { useEffect, useMemo, useState } from 'react';
+import AdminLayout from '../components/AdminLayout.jsx';
+import Card from '../components/Card.jsx';
+import Button from '../components/Button.jsx';
+import Spinner from '../components/Spinner.jsx';
+import { Field, Input, Select, Textarea } from '../components/Field.jsx';
+import { apiFetchJson } from '../lib/api.js';
+import { fromDatetimeLocalValue, toDatetimeLocalValue } from '../lib/format.js';
+import { navigate } from '../lib/router.js';
+import { useToast } from '../components/Toast.jsx';
+import { ensureSession, getAdminTokens } from '../lib/adminAuth.js';
+
+const MAX_UPLOAD_MB = 50;
+
+function normalizeNumber(value, fallback = 0) {
+  if (value == null || value === '') return fallback;
+  const parsed = Number(String(value).replace(',', '.').trim());
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function locationLabel(location) {
+  const title = location?.name || `Локация #${location?.id ?? '—'}`;
+  const details = [location?.metro, location?.address].filter(Boolean).join(' • ');
+  return details ? `${title} (${details})` : title;
+}
+
+function parseApiError(payload, status) {
+  if (!payload) return `HTTP ${status}`;
+  if (typeof payload === 'string') return payload;
+  if (payload?.error?.message) return String(payload.error.message);
+  if (Array.isArray(payload?.error?.details) && payload.error.details.length) {
+    const first = payload.error.details[0];
+    const loc = Array.isArray(first?.loc) ? first.loc.join('.') : '';
+    const msg = first?.msg ? String(first.msg) : '';
+    if (loc && msg) return `${loc}: ${msg}`;
+    if (msg) return msg;
+  }
+  if (typeof payload?.detail === 'string') return payload.detail;
+  return `HTTP ${status}`;
+}
+
+async function uploadTrainingMedia(file) {
+  const sizeMb = file.size / (1024 * 1024);
+  if (sizeMb > MAX_UPLOAD_MB) {
+    throw new Error(`Файл слишком большой: максимум ${MAX_UPLOAD_MB} МБ`);
+  }
+
+  const ok = await ensureSession();
+  if (!ok) {
+    throw new Error('Сессия истекла. Войдите снова.');
+  }
+
+  const { accessToken } = getAdminTokens();
+  const formData = new FormData();
+  formData.append('file', file);
+
+  let response = await fetch('/api/v1/trainings/media', {
+    method: 'POST',
+    headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined,
+    body: formData,
+  });
+
+  if (response.status === 401) {
+    const refreshed = await ensureSession();
+    if (!refreshed) throw new Error('Сессия истекла. Войдите снова.');
+
+    const retryToken = getAdminTokens().accessToken;
+    response = await fetch('/api/v1/trainings/media', {
+      method: 'POST',
+      headers: retryToken ? { Authorization: `Bearer ${retryToken}` } : undefined,
+      body: formData,
+    });
+  }
+
+  const raw = await response.text();
+  let payload = null;
+  try {
+    payload = raw ? JSON.parse(raw) : null;
+  } catch {
+    payload = raw;
+  }
+
+  if (!response.ok) {
+    throw new Error(parseApiError(payload, response.status));
+  }
+
+  const data = payload?.result || payload;
+  const url = data?.url;
+  if (!url) {
+    throw new Error('Сервер не вернул URL загруженного файла');
+  }
+
+  return String(url);
+}
+
+export default function TrainingFormPage({ mode, trainingId, routeState }) {
+  const toast = useToast();
+  const isEdit = mode === 'edit';
+
+  const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(Boolean(isEdit));
+
+  const [form, setForm] = useState({
+    title: '',
+    description: '',
+    start_at_local: '',
+    duration_minutes: 90,
+    min_level_name: 'Beginner',
+    max_level_name: 'Intermediate',
+    price: 0,
+    capacity_main: 12,
+    capacity_reserve: 12,
+    coach_name: '',
+    location_name: '',
+    image_url: '',
+    video_url: '',
+  });
+
+  const [imageFile, setImageFile] = useState(null);
+  const [videoFile, setVideoFile] = useState(null);
+  const [removeImage, setRemoveImage] = useState(false);
+  const [removeVideo, setRemoveVideo] = useState(false);
+  const [locations, setLocations] = useState([]);
+  const [selectedLocationId, setSelectedLocationId] = useState('');
+  const [selectedLocationFallback, setSelectedLocationFallback] = useState('');
+
+  const [errors, setErrors] = useState({});
+  const canSave = useMemo(() => !busy && !loading, [busy, loading]);
+
+  function setField(name, value) {
+    setForm((prev) => ({ ...prev, [name]: value }));
+  }
+
+  function validate() {
+    const nextErrors = {};
+
+    if (!form.title.trim() || form.title.trim().length < 2) {
+      nextErrors.title = 'Введите название (минимум 2 символа)';
+    }
+    if (!form.start_at_local) {
+      nextErrors.start_at_local = 'Выберите дату и время';
+    }
+
+    const duration = normalizeNumber(form.duration_minutes, NaN);
+    if (!Number.isFinite(duration) || duration <= 0) {
+      nextErrors.duration_minutes = 'Длительность должна быть больше 0';
+    }
+
+    const price = normalizeNumber(form.price, NaN);
+    if (!Number.isFinite(price) || price < 0) {
+      nextErrors.price = 'Цена должна быть числом >= 0';
+    }
+
+    const capMain = normalizeNumber(form.capacity_main, NaN);
+    if (!Number.isFinite(capMain) || capMain < 0) {
+      nextErrors.capacity_main = 'Вместимость основы должна быть числом >= 0';
+    }
+
+    const capReserve = normalizeNumber(form.capacity_reserve, NaN);
+    if (!Number.isFinite(capReserve) || capReserve < 0) {
+      nextErrors.capacity_reserve = 'Вместимость резерва должна быть числом >= 0';
+    }
+
+    if (!selectedLocationId && !form.location_name.trim()) {
+      nextErrors.location_name = 'Выберите локацию из списка или введите новую';
+    }
+
+    if (imageFile && !String(imageFile.type || '').startsWith('image/')) {
+      nextErrors.image_file = 'Загрузите файл изображения (image/*)';
+    }
+
+    if (videoFile && !String(videoFile.type || '').startsWith('video/')) {
+      nextErrors.video_file = 'Загрузите видеофайл (video/*)';
+    }
+
+    return nextErrors;
+  }
+
+  async function loadLocations() {
+    try {
+      const res = await apiFetchJson('/locations?limit=500&offset=0&only_with_trainings=false', { auth: false });
+      setLocations(res?.items || []);
+    } catch {
+      // Справочник локаций не критичен: можно ввести локацию вручную.
+    }
+  }
+
+  async function loadForEdit() {
+    const fromState = routeState?.training;
+    if (fromState && String(fromState.id) === String(trainingId)) {
+      const locationId = fromState.location_id != null ? String(fromState.location_id) : '';
+      const locationName = fromState.location_name || '';
+      setForm({
+        title: fromState.title || '',
+        description: fromState.description || '',
+        start_at_local: toDatetimeLocalValue(fromState.start_at),
+        duration_minutes: fromState.duration_minutes || 90,
+        min_level_name: fromState.min_level_name || 'Beginner',
+        max_level_name: fromState.max_level_name || 'Intermediate',
+        price: fromState.price ?? 0,
+        capacity_main: fromState.capacity_main ?? 0,
+        capacity_reserve: fromState.capacity_reserve ?? 0,
+        coach_name: fromState.coach_name || '',
+        location_name: locationId ? '' : locationName,
+        image_url: fromState.image_url || '',
+        video_url: fromState.video_url || '',
+      });
+      setSelectedLocationId(locationId);
+      setSelectedLocationFallback(locationId ? (locationName || `Локация #${locationId}`) : '');
+      setLoading(false);
+      return;
+    }
+
+    try {
+      const data = await apiFetchJson(`/trainings/admin/${trainingId}`, { auth: true });
+      const locationId = data.location_id != null ? String(data.location_id) : '';
+      const locationName = data.location_name || '';
+      setForm({
+        title: data.title || '',
+        description: data.description || '',
+        start_at_local: toDatetimeLocalValue(data.start_at),
+        duration_minutes: data.duration_minutes || 90,
+        min_level_name: data.min_level_name || 'Beginner',
+        max_level_name: data.max_level_name || 'Intermediate',
+        price: data.price ?? 0,
+        capacity_main: data.capacity_main ?? 0,
+        capacity_reserve: data.capacity_reserve ?? 0,
+        coach_name: data.coach_name || '',
+        location_name: locationId ? '' : locationName,
+        image_url: data.image_url || '',
+        video_url: data.video_url || '',
+      });
+      setSelectedLocationId(locationId);
+      setSelectedLocationFallback(locationId ? (locationName || `Локация #${locationId}`) : '');
+    } catch {
+      toast.push('Не удалось загрузить тренировку для редактирования', 'error');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadLocations();
+  }, []);
+
+  useEffect(() => {
+    if (isEdit) loadForEdit();
+    else setLoading(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isEdit, trainingId]);
+
+  async function onSave() {
+    const nextErrors = validate();
+    setErrors(nextErrors);
+    if (Object.keys(nextErrors).length) {
+      toast.push('Проверьте поля формы', 'error');
+      return;
+    }
+
+    const startAtIso = fromDatetimeLocalValue(form.start_at_local);
+    if (!startAtIso) {
+      setErrors((prev) => ({ ...prev, start_at_local: 'Некорректная дата/время' }));
+      toast.push('Проверьте дату и время', 'error');
+      return;
+    }
+
+    setBusy(true);
+    try {
+      let imageUrl = form.image_url || '';
+      let videoUrl = form.video_url || '';
+
+      if (removeImage) imageUrl = '';
+      if (removeVideo) videoUrl = '';
+
+      if (imageFile) {
+        imageUrl = await uploadTrainingMedia(imageFile);
+      }
+      if (videoFile) {
+        videoUrl = await uploadTrainingMedia(videoFile);
+      }
+
+      const payload = {
+        title: form.title.trim(),
+        description: form.description || null,
+        start_at: startAtIso,
+        duration_minutes: Math.max(1, Math.round(normalizeNumber(form.duration_minutes, 90))),
+        min_level_name: form.min_level_name || null,
+        max_level_name: form.max_level_name || null,
+        price: Math.max(0, normalizeNumber(form.price, 0)),
+        capacity_main: Math.max(0, Math.round(normalizeNumber(form.capacity_main, 0))),
+        capacity_reserve: Math.max(0, Math.round(normalizeNumber(form.capacity_reserve, 0))),
+        coach_name: form.coach_name || null,
+        location_id: selectedLocationId ? Number(selectedLocationId) : null,
+        location_name: selectedLocationId ? null : (form.location_name.trim() || null),
+        image_url: imageUrl || null,
+        video_url: videoUrl || null,
+      };
+
+      if (isEdit) {
+        await apiFetchJson(`/trainings/${trainingId}`, { method: 'PATCH', body: payload, auth: true });
+        toast.push('Тренировка обновлена', 'success');
+      } else {
+        await apiFetchJson('/trainings', { method: 'POST', body: payload, auth: true });
+        toast.push('Тренировка создана', 'success');
+      }
+
+      navigate('/trainings');
+    } catch (e) {
+      toast.push(e?.message || 'Ошибка сохранения', 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <AdminLayout
+      title={isEdit ? `Редактирование #${trainingId}` : 'Создание тренировки'}
+      subtitle="Заполните поля и сохраните изменения"
+      actions={(
+        <>
+          <Button variant="secondary" onClick={() => navigate('/trainings')} disabled={busy}>Назад</Button>
+          <Button onClick={onSave} disabled={!canSave}>
+            {busy ? (
+              <span className="inline-flex items-center gap-8"><Spinner size={16} /> Сохраняем</span>
+            ) : (
+              'Сохранить'
+            )}
+          </Button>
+        </>
+      )}
+    >
+      <Card className="form">
+        {loading ? (
+          <div className="inline-flex items-center gap-10">
+            <Spinner size={18} /> Загружаем данные...
+          </div>
+        ) : (
+          <div className="grid-2">
+            <Field label="Название" error={errors.title}>
+              <Input value={form.title} onChange={(e) => setField('title', e.target.value)} />
+            </Field>
+
+            <Field label="Дата и время" error={errors.start_at_local}>
+              <Input
+                type="datetime-local"
+                value={form.start_at_local}
+                onChange={(e) => setField('start_at_local', e.target.value)}
+              />
+            </Field>
+
+            <Field label="Длительность, минут" error={errors.duration_minutes}>
+              <Input
+                type="text"
+                inputMode="decimal"
+                value={form.duration_minutes}
+                onChange={(e) => setField('duration_minutes', e.target.value)}
+              />
+            </Field>
+
+            <Field label="Стоимость, ₽" error={errors.price}>
+              <Input
+                type="text"
+                inputMode="decimal"
+                value={form.price}
+                onChange={(e) => setField('price', e.target.value)}
+              />
+            </Field>
+
+            <Field label="Вместимость (основа)" error={errors.capacity_main}>
+              <Input
+                type="text"
+                inputMode="numeric"
+                value={form.capacity_main}
+                onChange={(e) => setField('capacity_main', e.target.value)}
+              />
+            </Field>
+
+            <Field label="Вместимость (резерв)" error={errors.capacity_reserve}>
+              <Input
+                type="text"
+                inputMode="numeric"
+                value={form.capacity_reserve}
+                onChange={(e) => setField('capacity_reserve', e.target.value)}
+              />
+            </Field>
+
+            <Field label="Минимальный уровень">
+              <Input value={form.min_level_name} onChange={(e) => setField('min_level_name', e.target.value)} />
+            </Field>
+
+            <Field label="Максимальный уровень">
+              <Input value={form.max_level_name} onChange={(e) => setField('max_level_name', e.target.value)} />
+            </Field>
+
+            <Field label="Тренер">
+              <Input value={form.coach_name} onChange={(e) => setField('coach_name', e.target.value)} />
+            </Field>
+
+            <Field label="Локация из справочника">
+              <Select
+                value={selectedLocationId}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setSelectedLocationId(value);
+                  if (value) {
+                    setField('location_name', '');
+                  }
+                }}
+              >
+                <option value="">Новая локация (ввести вручную)</option>
+                {selectedLocationId && selectedLocationFallback && !locations.some((l) => String(l.id) === selectedLocationId) ? (
+                  <option value={selectedLocationId}>{selectedLocationFallback}</option>
+                ) : null}
+                {locations.map((location) => (
+                  <option key={location.id} value={String(location.id)}>
+                    {locationLabel(location)}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+
+            <Field
+              label="Новая локация"
+              error={errors.location_name}
+              hint="Если в списке нет нужной локации, введите название вручную"
+            >
+              <Input
+                value={form.location_name}
+                onChange={(e) => setField('location_name', e.target.value)}
+                placeholder="Например: Дворец спорта Левобережный"
+                disabled={Boolean(selectedLocationId)}
+              />
+            </Field>
+
+            <Field
+              label="Фото тренировки"
+              error={errors.image_file}
+              hint="Загрузите изображение. Поддерживаются форматы image/*, до 50 МБ"
+            >
+              <>
+                <Input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0] || null;
+                    setImageFile(f);
+                    if (f) setRemoveImage(false);
+                  }}
+                />
+                {imageFile ? <div className="field-hint">Выбран файл: {imageFile.name}</div> : null}
+                {!imageFile && form.image_url ? (
+                  <div className="field-hint">Текущее фото: <a href={form.image_url} target="_blank" rel="noreferrer">открыть</a></div>
+                ) : null}
+                {(imageFile || form.image_url) ? (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => {
+                      setImageFile(null);
+                      setRemoveImage(true);
+                    }}
+                  >
+                    Убрать фото
+                  </Button>
+                ) : null}
+              </>
+            </Field>
+
+            <Field
+              label="Видео тренировки"
+              error={errors.video_file}
+              hint="Загрузите видео. Поддерживаются форматы video/*, до 50 МБ"
+            >
+              <>
+                <Input
+                  type="file"
+                  accept="video/*"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0] || null;
+                    setVideoFile(f);
+                    if (f) setRemoveVideo(false);
+                  }}
+                />
+                {videoFile ? <div className="field-hint">Выбран файл: {videoFile.name}</div> : null}
+                {!videoFile && form.video_url ? (
+                  <div className="field-hint">Текущее видео: <a href={form.video_url} target="_blank" rel="noreferrer">открыть</a></div>
+                ) : null}
+                {(videoFile || form.video_url) ? (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => {
+                      setVideoFile(null);
+                      setRemoveVideo(true);
+                    }}
+                  >
+                    Убрать видео
+                  </Button>
+                ) : null}
+              </>
+            </Field>
+
+            <Field label="Описание">
+              <Textarea rows={4} value={form.description} onChange={(e) => setField('description', e.target.value)} />
+            </Field>
+          </div>
+        )}
+      </Card>
+    </AdminLayout>
+  );
+}

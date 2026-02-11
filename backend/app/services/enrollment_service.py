@@ -10,6 +10,8 @@ from app.policies import CANCEL_MIN_DELTA
 
 from app.models.training import Training
 from app.models.enrollment import Enrollment, EnrollmentStatus
+from app.models.user import User
+from app.services.ban_service import has_active_ban
 
 
 def _now_aware() -> datetime:
@@ -148,6 +150,17 @@ def _estimate_amount(training: Training, enrollment: Optional[Enrollment] = None
     return 0.0
 
 
+def _is_user_blocked_for_enrollment(db: Session, user_id: int) -> bool:
+    if has_active_ban(db, user_id=user_id):
+        return True
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if user is None:
+        raise AppException.not_found(ErrorCode.USER_NOT_FOUND, f"User {user_id} not found")
+
+    return not bool(getattr(user, "is_active", True))
+
+
 # ---------------------------------------------------------------------
 # PUBLIC API (то, что обычно импортируют роутеры)
 # ---------------------------------------------------------------------
@@ -220,6 +233,12 @@ def enroll_user_to_training(
     price_tier_id: Optional[int] = None,
 ) -> Enrollment:
     training = _get_training(db, training_id)
+
+    if _is_user_blocked_for_enrollment(db, user_id=user_id):
+        raise AppException.forbidden(
+            message="Пользователь находится в бане и не может записываться на тренировки",
+            details={"user_id": user_id},
+        )
 
     existing = (
         db.query(Enrollment)

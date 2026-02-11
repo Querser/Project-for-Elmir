@@ -6,7 +6,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class SettingUpsertRequest(BaseModel):
-    key: str = Field(..., min_length=1, max_length=150)
     value: str = Field(..., min_length=0)
     description: Optional[str] = Field(default=None, max_length=2000)
 

@@ -38,15 +38,9 @@ def get_current_admin(
     current_user: User | None = Depends(get_current_user),
 ) -> User:
     if current_user is None:
-        raise AppException(
-            ErrorCode.UNAUTHORIZED,
-            "Пользователь не авторизован через Telegram",
-        )
+        raise AppException.unauthorized("Пользователь не авторизован через Telegram")
     if not current_user.is_admin:
-        raise AppException(
-            ErrorCode.FORBIDDEN,
-            "Только администратор может выполнять это действие",
-        )
+        raise AppException.forbidden("Только администратор может выполнять это действие")
     return current_user
 
 
@@ -105,7 +99,7 @@ def close_debt_admin(
 
     debt = db.get(Debt, debt_id)
     if debt is None:
-        raise AppException(ErrorCode.INTERNAL_SERVER_ERROR, "Долг не найден после закрытия")
+        raise AppException.internal("Долг не найден после закрытия")
 
     dto = _validate(DebtResponse, debt)
     return success_response(_dump(dto))

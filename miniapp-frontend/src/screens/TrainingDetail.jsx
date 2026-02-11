@@ -128,6 +128,35 @@ function extractLatLon(obj) {
   return { lat, lon };
 }
 
+function participantDisplayName(item) {
+  const fullName = maybeFixUtf8Mojibake(item?.full_name ?? '').toString().trim();
+  if (fullName) return fullName;
+
+  const first = maybeFixUtf8Mojibake(item?.first_name ?? '').toString().trim();
+  const last = maybeFixUtf8Mojibake(item?.last_name ?? '').toString().trim();
+  const joined = [first, last].filter(Boolean).join(' ').trim();
+  if (joined) return joined;
+
+  const rawUsername = maybeFixUtf8Mojibake(item?.username ?? '').toString().trim();
+  if (rawUsername) return rawUsername.startsWith('@') ? rawUsername : `@${rawUsername}`;
+
+  if (item?.user_id != null) return `Игрок #${item.user_id}`;
+  return 'Игрок';
+}
+
+function participantMeta(item) {
+  const parts = [];
+  const rawUsername = maybeFixUtf8Mojibake(item?.username ?? '').toString().trim();
+  if (rawUsername) {
+    parts.push(rawUsername.startsWith('@') ? rawUsername : `@${rawUsername}`);
+  }
+
+  const levelName = maybeFixUtf8Mojibake(item?.level_name ?? '').toString().trim();
+  if (levelName) parts.push(levelName);
+
+  return parts.join(' • ');
+}
+
 export default function TrainingDetail({ trainingId, onBack, onChanged }) {
   const [training, setTraining] = useState(null);
   const [locationLabel, setLocationLabel] = useState('');
@@ -295,6 +324,20 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
     return { min: Math.min(...nums), max: Math.max(...nums) };
   }, [tiers]);
 
+  const participantsMain = useMemo(
+    () => (Array.isArray(training?.participants_main) ? training.participants_main : []),
+    [training],
+  );
+  const participantsReserve = useMemo(
+    () => (Array.isArray(training?.participants_reserve) ? training.participants_reserve : []),
+    [training],
+  );
+  const participantsTotal = useMemo(() => {
+    const fromApi = toNumber(training?.participants_total);
+    if (fromApi != null) return fromApi;
+    return participantsMain.length + participantsReserve.length;
+  }, [training, participantsMain.length, participantsReserve.length]);
+
   const capacityMain = useMemo(() => toNumber(training?.capacity_main) ?? 0, [training]);
 
   const freePlaces = useMemo(() => {
@@ -353,7 +396,29 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
     return s;
   }, [locationLabel]);
 
+
+  const backendMapWidgetSrc = useMemo(() => {
+    return (
+      training?.maps?.widget_url ||
+      training?.maps?.widgetUrl ||
+      training?.yandex_widget_url ||
+      training?.yandexWidgetUrl ||
+      ''
+    );
+  }, [training]);
+
+  const backendRouteHref = useMemo(() => {
+    return (
+      training?.maps?.route_url ||
+      training?.maps?.routeUrl ||
+      training?.yandex_route_url ||
+      training?.yandexRouteUrl ||
+      ''
+    );
+  }, [training]);
+
   const yandexMapSrc = useMemo(() => {
+    if (backendMapWidgetSrc) return backendMapWidgetSrc;
     if (coords.lat != null && coords.lon != null) {
       const ll = `${coords.lon},${coords.lat}`; // ll = lon,lat
       return `https://yandex.ru/map-widget/v1/?ll=${encodeURIComponent(ll)}&z=15&pt=${encodeURIComponent(
@@ -364,9 +429,10 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
       return `https://yandex.ru/map-widget/v1/?text=${encodeURIComponent(mapTextLabel)}&z=15&lang=ru_RU`;
     }
     return '';
-  }, [coords, mapTextLabel]);
+  }, [backendMapWidgetSrc, coords, mapTextLabel]);
 
   const yandexRouteHref = useMemo(() => {
+    if (backendRouteHref) return backendRouteHref;
     if (coords.lat != null && coords.lon != null) {
       return `https://yandex.ru/maps/?mode=routes&rtext=~${coords.lat},${coords.lon}&rtt=auto`;
     }
@@ -374,7 +440,22 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
       return `https://yandex.ru/maps/?mode=routes&rtext=~${encodeURIComponent(mapTextLabel)}&rtt=auto`;
     }
     return '';
-  }, [coords, mapTextLabel]);
+  }, [backendRouteHref, coords, mapTextLabel]);
+
+
+  const calendarHref = useMemo(() => {
+    return (
+      training?.calendar?.google_url ||
+      training?.calendar?.googleUrl ||
+      training?.calendar_google_url ||
+      training?.calendarGoogleUrl ||
+      training?.calendar?.ics_url ||
+      training?.calendar?.icsUrl ||
+      training?.calendar_ics_url ||
+      training?.calendarIcsUrl ||
+      ''
+    );
+  }, [training]);
 
   const enrollButtonLabel = useMemo(() => {
     if (isEnrolled) return 'Отменить запись';
@@ -601,7 +682,46 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
                 <span>Свободно</span>
                 <span>{freePlaces} мест</span>
               </div>
-              {isEnrolled ? <p className="hint">{enrolledStatusLabel}</p> : <p className="hint">Успей записаться первым!</p>}
+
+              <div className="participants-list-block">
+                <div className="participants-list-title">Основа ({participantsMain.length})</div>
+                {participantsMain.length ? (
+                  <ul className="participants-list">
+                    {participantsMain.map((p, idx) => (
+                      <li key={`m-${p?.enrollment_id ?? p?.user_id ?? idx}`} className="participants-item">
+                        <span className="participants-name">{participantDisplayName(p)}</span>
+                        {participantMeta(p) ? <span className="participants-meta">{participantMeta(p)}</span> : null}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div className="participants-empty">Пока никто не записан в основу</div>
+                )}
+              </div>
+
+              <div className="participants-list-block">
+                <div className="participants-list-title">Резерв ({participantsReserve.length})</div>
+                {participantsReserve.length ? (
+                  <ul className="participants-list">
+                    {participantsReserve.map((p, idx) => (
+                      <li key={`r-${p?.enrollment_id ?? p?.user_id ?? idx}`} className="participants-item">
+                        <span className="participants-name">{participantDisplayName(p)}</span>
+                        {participantMeta(p) ? <span className="participants-meta">{participantMeta(p)}</span> : null}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div className="participants-empty">В резерве пока никого</div>
+                )}
+              </div>
+
+              {isEnrolled ? (
+                <p className="hint">{enrolledStatusLabel}</p>
+              ) : (
+                <p className="hint">
+                  {participantsTotal > 0 ? `Уже записано: ${participantsTotal}` : 'Пока никто не записался — будьте первым!'}
+                </p>
+              )}
               {cancelBlockedHint ? (
                 <p className="hint" style={{ color: 'var(--danger)' }}>
                   {cancelBlockedHint}
@@ -612,6 +732,16 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
             <button className="primary-btn" type="button" onClick={openEnrollFlow} disabled={enrollButtonDisabled}>
               {saving ? 'Подождите…' : enrollButtonLabel}
             </button>
+            {isEnrolled && calendarHref ? (
+              <button
+                className="secondary-btn"
+                type="button"
+                onClick={() => openExternalLink(calendarHref)}
+                style={{ width: '100%', marginTop: 10 }}
+              >
+                Добавить в календарь
+              </button>
+            ) : null}
           </>
         ) : null}
       </section>

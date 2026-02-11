@@ -8,7 +8,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass
-from typing import Generator, Optional, Union
+from typing import Generator, Optional, Union, Any
 from urllib.parse import parse_qsl
 from uuid import UUID
 
@@ -29,6 +29,18 @@ try:
     from app.models.user import User  # type: ignore
 except Exception:
     from app.db.models import User  # type: ignore
+
+
+# -----------------------------
+# Admin token imports (stage 13)
+# -----------------------------
+try:
+    from app.core.admin_tokens import verify_admin_access_token, AdminTokenError  # type: ignore
+except Exception:  # pragma: no cover
+    verify_admin_access_token = None  # type: ignore
+
+    class AdminTokenError(Exception):  # type: ignore
+        pass
 
 
 # -----------------------------
@@ -191,9 +203,7 @@ def _get_dev_default_telegram_id() -> Optional[int]:
     if not raw:
         return None
 
-    # допускаем только целое число (обычно положительное)
     if not re.fullmatch(r"-?\d+", raw):
-        # логируем только реальную ошибку, а не кавычки
         log.error("DEV_DEFAULT_TELEGRAM_ID is set but invalid: %r", raw)
         return None
 
@@ -316,7 +326,7 @@ def get_current_user(
 
                 user = _get_user_by_id(db, user_id)
                 if not user:
-                    raise unauthorized("Unauthorized: user not found for X-User- Plains header", required_header="X-User-Id")
+                    raise unauthorized("Unauthorized: user not found for X-User-Id header", required_header="X-User-Id")
                 return user
 
             tg_id_raw = _get_header(request, "X-Telegram-Id")
@@ -364,7 +374,7 @@ def get_current_user_optional(
 
 
 # -----------------------------
-# Admin dependencies
+# Admin dependencies (telegram-admin mode)
 # -----------------------------
 def _is_admin_user(user: User) -> bool:
     if hasattr(user, "is_admin") and bool(getattr(user, "is_admin")):
@@ -395,3 +405,72 @@ def get_current_admin_user(
 
 
 require_admin = get_current_admin_user
+
+
+# -----------------------------
+# Admin dependencies (bearer-token mode for admin panel)
+# -----------------------------
+@dataclass(frozen=True)
+class AdminPrincipal:
+    username: str
+
+
+def _get_bearer_token(request: Request) -> Optional[str]:
+    raw = request.headers.get("Authorization")
+    if not raw:
+        return None
+    raw = raw.strip()
+    if not raw:
+        return None
+    if raw.lower().startswith("bearer "):
+        token = raw[7:].strip()
+        return token or None
+    return None
+
+
+def get_current_admin_principal(
+    request: Request,
+) -> AdminPrincipal:
+    """
+    Только Bearer access token (для админ-панели).
+    """
+    token = _get_bearer_token(request)
+    if not token:
+        raise unauthorized("Требуется Bearer access token", required_header="Authorization: Bearer <access_token>")
+
+    if verify_admin_access_token is None:
+        raise internal_error("Admin token module is not configured (admin_tokens.py missing)")
+
+    try:
+        payload = verify_admin_access_token(token)
+    except AdminTokenError:
+        raise unauthorized("Неверный или просроченный access token", required_header="Authorization: Bearer <access_token>")
+    except Exception:
+        log.exception("Unhandled error while verifying admin token")
+        raise unauthorized("Неверный или просроченный access token", required_header="Authorization: Bearer <access_token>")
+
+    username = str(payload.get("username") or payload.get("sub") or "admin")
+    return AdminPrincipal(username=username)
+
+
+def get_current_admin_user_any(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Any:
+    """
+    Гибрид:
+    - если есть Authorization: Bearer ... -> токенная админка
+    - иначе -> старый механизм (Telegram initData/dev headers + проверка админа)
+    """
+    token = _get_bearer_token(request)
+    if token:
+        return get_current_admin_principal(request=request)
+
+    # fallback to старой авторизации
+    user = get_current_user(request=request, db=db)
+    if not _is_admin_user(user):
+        raise forbidden("Недостаточно прав")
+    return user
+
+
+require_admin_any = get_current_admin_user_any

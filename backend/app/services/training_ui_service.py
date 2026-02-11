@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session
 
 from app.services.policies import cancel_deadline_at, pick_price_for_user, is_late_cancel
+from app.services.ban_service import has_active_ban
 
 # Пытаемся подцепить твою модель price tiers (как ты её назвал в новых файлах)
 PriceTierModel = None
@@ -36,7 +37,50 @@ def _status_value(v: Any) -> str:
     return getattr(v, "value", None) or str(v)
 
 
-def build_training_ui_payload(db: Session, training: Any, user: Any | None) -> Dict[str, Any]:
+def _safe_text(v: Any) -> str:
+    if v is None:
+        return ""
+    try:
+        return str(v).strip()
+    except Exception:
+        return ""
+
+
+def _participant_payload(enrollment: Any, *, is_reserve: bool) -> dict[str, Any]:
+    user_obj = getattr(enrollment, "user", None)
+    user_id = getattr(enrollment, "user_id", None)
+
+    first_name = _safe_text(getattr(user_obj, "first_name", None))
+    last_name = _safe_text(getattr(user_obj, "last_name", None))
+    username = _safe_text(getattr(user_obj, "username", None))
+
+    full_name = " ".join(x for x in (first_name, last_name) if x).strip()
+    if not full_name and username:
+        full_name = f"@{username}"
+    if not full_name and user_id is not None:
+        full_name = f"Игрок #{user_id}"
+
+    level_name = _safe_text(getattr(getattr(user_obj, "level", None), "name", None))
+
+    return {
+        "enrollment_id": getattr(enrollment, "id", None),
+        "user_id": user_id,
+        "first_name": first_name or None,
+        "last_name": last_name or None,
+        "username": username or None,
+        "full_name": full_name or None,
+        "level_name": level_name or None,
+        "is_reserve": bool(is_reserve),
+    }
+
+
+def build_training_ui_payload(
+    db: Session,
+    training: Any,
+    user: Any | None,
+    *,
+    include_participants: bool = True,
+) -> Dict[str, Any]:
     training_id = getattr(training, "id", None)
 
     capacity_main = int(getattr(training, "capacity_main", 0) or 0)
@@ -47,9 +91,21 @@ def build_training_ui_payload(db: Session, training: Any, user: Any | None) -> D
     user_enrollment_status = "none"
     user_queue_position = None
     user_enrollment_id: Optional[int] = None
+    participants_main: list[dict[str, Any]] = []
+    participants_reserve: list[dict[str, Any]] = []
 
     if EnrollmentModel is not None and training_id is not None:
         q = db.query(EnrollmentModel).filter(EnrollmentModel.training_id == training_id)
+        if hasattr(EnrollmentModel, "id"):
+            q = q.order_by(getattr(EnrollmentModel, "id").asc())
+        if include_participants and hasattr(EnrollmentModel, "user"):
+            try:
+                from sqlalchemy.orm import selectinload
+
+                q = q.options(selectinload(getattr(EnrollmentModel, "user")))
+            except Exception:
+                # Если eager-loading недоступен, продолжим без него.
+                pass
 
         rows: List[Any] = q.all()
         for e in rows:
@@ -64,6 +120,13 @@ def build_training_ui_payload(db: Session, training: Any, user: Any | None) -> D
                     occupied_reserve += 1
                 else:
                     occupied_main += 1
+
+                if include_participants:
+                    participant = _participant_payload(e, is_reserve=is_reserve)
+                    if is_reserve:
+                        participants_reserve.append(participant)
+                    else:
+                        participants_main.append(participant)
 
             if user is not None and getattr(e, "user_id", None) == getattr(user, "id", None):
                 # --- статус для UI (frontend ждёт main/reserve/none/cancelled) ---
@@ -106,9 +169,15 @@ def build_training_ui_payload(db: Session, training: Any, user: Any | None) -> D
     is_reserve_available = capacity_reserve > occupied_reserve
     can_enroll = False
     can_enroll_reserve = False
+    user_has_active_ban = False
     if user is not None and user_enrollment_status in ("none", "", "cancelled", "canceled"):
-        can_enroll = free_places > 0
-        can_enroll_reserve = (free_places <= 0) and is_reserve_available
+        user_id = getattr(user, "id", None)
+        if user_id is not None:
+            user_has_active_ban = has_active_ban(db, int(user_id))
+
+        if not user_has_active_ban:
+            can_enroll = free_places > 0
+            can_enroll_reserve = (free_places <= 0) and is_reserve_available
 
     deadline = cancel_deadline_at(training)
     can_cancel = False
@@ -117,13 +186,14 @@ def build_training_ui_payload(db: Session, training: Any, user: Any | None) -> D
 
     late_cancel = is_late_cancel(training)
 
-    return {
+    payload = {
         "occupied_main": occupied_main,
         "occupied_reserve": occupied_reserve,
         "free_places": free_places,
         "can_enroll": can_enroll,
         "can_enroll_reserve": can_enroll_reserve,
         "is_reserve_available": is_reserve_available,
+        "user_has_active_ban": user_has_active_ban,
         "user_enrollment_status": user_enrollment_status,
         "user_queue_position": user_queue_position,
         "user_enrollment_id": user_enrollment_id,
@@ -136,3 +206,10 @@ def build_training_ui_payload(db: Session, training: Any, user: Any | None) -> D
         "is_late_cancel": late_cancel,
         "can_cancel": can_cancel,
     }
+
+    if include_participants:
+        payload["participants_main"] = participants_main
+        payload["participants_reserve"] = participants_reserve
+        payload["participants_total"] = len(participants_main) + len(participants_reserve)
+
+    return payload

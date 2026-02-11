@@ -22,6 +22,8 @@ class TrainingReadUI(BaseModel):
     ends_at: Optional[datetime] = None
     title: Optional[str] = None
     location: Optional[str] = None
+    location_id: Optional[int] = None
+    location_name: Optional[str] = None
     price: Optional[float] = None
 
     capacity_main: Optional[int] = None

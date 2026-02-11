@@ -8,10 +8,17 @@ from app.models.setting import Setting
 
 
 DEFAULT_SETTINGS: dict[str, tuple[str, str]] = {
-    # key: (value, description)
-    "cancel_hours_before_training": ("4", "Запрет отмены записи менее чем за N часов до начала"),
-    "autoban_hours_before_training": ("2", "Автобан/долг за неоплату за N часов до начала"),
-    "ban_text_default": ("У вас бан. Обратитесь к администратору.", "Текст по умолчанию для экрана бана"),
+    "cancel_hours_before_training": ("4", "Hours before training when cancellation is forbidden"),
+    "autoban_hours_before_training": ("2", "Hours before training for autoban on unpaid enrollment"),
+    "ban_text_default": ("У вас бан. Обратитесь к администратору.", "Default text for banned users"),
+    "contacts_text": (
+        "Контакты администратора:\nТелефон: +7 (000) 000-00-00\nTelegram: @elmiravolley",
+        "Text for Telegram bot Contacts button",
+    ),
+    "rules_text": (
+        "Правила школы:\n1) Приходите заранее.\n2) Учитывайте срок отмены.\n3) Соблюдайте уважительное общение.",
+        "Text for Telegram bot Rules button",
+    ),
 }
 
 
@@ -59,7 +66,6 @@ class SettingsService:
             db.commit()
         return created
 
-    # удобные typed-getters (на будущее, чтобы код тренировок/банов мог читать настройки)
     @staticmethod
     def get_int(db: Session, key: str, default: int) -> int:
         row = SettingsService.get(db, key)
@@ -74,3 +80,4 @@ class SettingsService:
     def get_str(db: Session, key: str, default: str) -> str:
         row = SettingsService.get(db, key)
         return row.value if row else default
+

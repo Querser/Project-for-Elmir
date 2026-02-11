@@ -92,15 +92,58 @@ def manual_ban_user(db: Session, *, user_id: int, reason: str, until: Optional[d
     return _create_ban(db, user_id=user_id, ban_type=BanType.MANUAL, reason=reason, until=until)
 
 
-def create_auto_debt_ban(db: Session, *, user_id: int, reason: str, until: Optional[datetime] = None) -> Ban:
+def create_auto_debt_ban(
+    db: Session,
+    *,
+    user_id: int,
+    reason: Optional[str] = None,
+    until: Optional[datetime] = None,
+    training_id: Optional[int] = None,
+) -> Ban:
     """
-    Для autoban_job: создаём авто-бан за долг.
+    Создаёт AUTO_DEBT бан.
+    Поддерживает старый и новый контракт (с reason или training_id).
     """
-    return _create_ban(db, user_id=user_id, ban_type=BanType.AUTO_DEBT, reason=reason, until=until)
+    final_reason = (reason or "").strip()
+    if not final_reason:
+        final_reason = (
+            f"Невыплаченный долг по тренировке #{training_id}"
+            if training_id is not None
+            else "Невыплаченный долг"
+        )
+    return _create_ban(db, user_id=user_id, ban_type=BanType.AUTO_DEBT, reason=final_reason, until=until)
 
 
-# alias на случай другого имени в job
-ensure_auto_debt_ban = create_auto_debt_ban
+def ensure_auto_debt_ban(
+    db: Session,
+    *,
+    user_id: int,
+    training_id: Optional[int] = None,
+    reason: Optional[str] = None,
+    until: Optional[datetime] = None,
+) -> Ban:
+    """
+    Идемпотентно обеспечивает активный AUTO_DEBT бан.
+    Если бан уже активен - возвращает его, иначе создаёт новый.
+    """
+    now = _now_utc()
+    existing = (
+        db.query(Ban)
+        .filter(Ban.user_id == user_id, Ban.type == BanType.AUTO_DEBT)
+        .filter(_active_until_filter(now))
+        .order_by(Ban.id.desc())
+        .first()
+    )
+    if existing:
+        return existing
+
+    return create_auto_debt_ban(
+        db,
+        user_id=user_id,
+        reason=reason,
+        until=until,
+        training_id=training_id,
+    )
 
 
 def deactivate_auto_debt_bans_if_any(db: Session, *, user_id: int) -> int:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import text
@@ -52,6 +53,9 @@ def list_audit_logs(
     action: Optional[str] = None,
     entity: Optional[str] = None,
     entity_id: Optional[int] = None,
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None,
+    training_id: Optional[int] = None,
 ) -> Tuple[List[dict], int]:
     where = []
     params = {
@@ -61,6 +65,9 @@ def list_audit_logs(
         "action": action,
         "entity": entity,
         "entity_id": entity_id,
+        "date_from": date_from,
+        "date_to": date_to,
+        "training_id": training_id,
     }
 
     if user_id is not None:
@@ -71,6 +78,20 @@ def list_audit_logs(
         where.append("entity = :entity")
     if entity_id is not None:
         where.append("entity_id = :entity_id")
+    if date_from is not None:
+        where.append("created_at >= :date_from")
+    if date_to is not None:
+        where.append("created_at <= :date_to")
+    if training_id is not None:
+        where.append(
+            """
+            (
+                (entity = 'training' AND entity_id = :training_id)
+                OR
+                (data ? 'training_id' AND data->>'training_id' = CAST(:training_id AS text))
+            )
+            """
+        )
 
     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
 

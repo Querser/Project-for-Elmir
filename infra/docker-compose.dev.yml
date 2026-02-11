@@ -24,28 +24,42 @@ services:
     container_name: volleyball_backend
     environment:
       # --- DB ---
-      # КЛЮЧЕВОЕ: если DATABASE_URL не задан или пустой -> берём рабочий дефолт
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://postgres:postgres@db:5432/volleyball_db}
 
       # --- Общие ---
       ENVIRONMENT: ${ENVIRONMENT:-development}
 
+      # --- Admin auth (ВАЖНО) ---
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
+
+      # Секрет подписи токенов + параметры жизни токенов
+      ADMIN_TOKEN_SECRET: ${ADMIN_TOKEN_SECRET:-CHANGE_ME__very_long_random_secret_string_64_chars_min}
+      ADMIN_ACCESS_TOKEN_TTL_MINUTES: ${ADMIN_ACCESS_TOKEN_TTL_MINUTES:-30}
+      ADMIN_REFRESH_TOKEN_TTL_DAYS: ${ADMIN_REFRESH_TOKEN_TTL_DAYS:-14}
+      ADMIN_TOKEN_VERSION: ${ADMIN_TOKEN_VERSION:-1}
+
+      # (опционально) универсальный SECRET_KEY, если в коде он используется вместо ADMIN_TOKEN_SECRET
+      SECRET_KEY: ${SECRET_KEY:-CHANGE_ME__very_long_random_secret_string_64_chars_min}
+
       # --- Telegram ---
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
-      TELEGRAM_WEBAPP_URL: ${TELEGRAM_WEBAPP_URL:-http://localhost:8081/}
+      TELEGRAM_WEBAPP_URL: ${TELEGRAM_WEBAPP_URL:-http://localhost:8080/}
+      TELEGRAM_ADMIN_WEBAPP_URL: ${TELEGRAM_ADMIN_WEBAPP_URL:-http://localhost:8080/admin/}
+      TELEGRAM_WEBHOOK_URL: ${TELEGRAM_WEBHOOK_URL:-}
+      TELEGRAM_BOT_WEBHOOK_SECRET: ${TELEGRAM_BOT_WEBHOOK_SECRET:-}
 
-      # --- DEV auth (чтобы работали X-User-Id / X-Telegram-Id без initData) ---
+      # --- DEV auth ---
       ALLOW_INSECURE_HEADER_AUTH: ${ALLOW_INSECURE_HEADER_AUTH:-1}
       DEV_AUTO_CREATE_USER_FROM_HEADER: ${DEV_AUTO_CREATE_USER_FROM_HEADER:-1}
       DEV_DEFAULT_TELEGRAM_ID: ${DEV_DEFAULT_TELEGRAM_ID:-1726307767}
-      # опционально, если у тебя это в deps.py используется:
       DEV_ADMIN_TELEGRAM_IDS: ${DEV_ADMIN_TELEGRAM_IDS:-1726307767}
 
-      # --- Payments (если backend реально читает их из env) ---
+      # --- Payments ---
       PAYMENT_PROVIDER_KEY: ${PAYMENT_PROVIDER_KEY:-}
       PAYMENT_PROVIDER_SECRET: ${PAYMENT_PROVIDER_SECRET:-}
 
-      # --- Postgres vars (опционально, но удобно иметь внутри backend) ---
+      # --- Postgres vars ---
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-volleyball_db}
@@ -61,6 +75,7 @@ services:
       - ../backend:/app
     restart: unless-stopped
 
+
   miniapp:
     build:
       context: ../miniapp-frontend
@@ -68,7 +83,8 @@ services:
     container_name: volleyball_miniapp
     environment:
       ENVIRONMENT: ${ENVIRONMENT:-development}
-      TELEGRAM_WEBAPP_URL: ${TELEGRAM_WEBAPP_URL:-http://localhost:8081/}
+      APP_LOG_FILE: ${APP_LOG_FILE:-/app/logs/app.log}
+      TELEGRAM_WEBAPP_URL: ${TELEGRAM_WEBAPP_URL:-http://localhost:8080/}
       BACKEND_PORT: ${BACKEND_PORT:-8001}
     ports:
       - "8081:80"
@@ -78,12 +94,27 @@ services:
     build:
       context: ../admin-frontend
       dockerfile: Dockerfile
+      args:
+        VITE_BASE_PATH: ${ADMIN_BASE_PATH:-/admin/}
     container_name: volleyball_admin
     environment:
       ENVIRONMENT: ${ENVIRONMENT:-development}
       BACKEND_PORT: ${BACKEND_PORT:-8001}
     ports:
       - "8082:80"
+    restart: unless-stopped
+
+  gateway:
+    image: nginx:alpine
+    container_name: volleyball_gateway
+    depends_on:
+      - backend
+      - miniapp
+      - admin
+    ports:
+      - "${GATEWAY_PORT:-8080}:80"
+    volumes:
+      - ./gateway/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     restart: unless-stopped
 
 volumes:

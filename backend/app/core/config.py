@@ -35,11 +35,6 @@ else:
 
 
 def _env_str(name: str, default: str = "") -> str:
-    """
-    Безопасно читает строковую переменную окружения:
-    - если переменная НЕ задана -> default
-    - если переменная задана, но пустая/пробелы -> default
-    """
     val = os.getenv(name)
     if val is None:
         return default
@@ -62,18 +57,30 @@ class Settings(BaseModel):
     project_name: str = _env_str("PROJECT_NAME", "Volleyball Training API")
     api_v1_str: str = _env_str("API_V1_STR", "/api/v1")
 
-    # ✅ теперь реально берём из окружения (и не ломаемся на пустом значении)
     environment: str = _env_str("ENVIRONMENT", "development")
 
     telegram_bot_token: str = _env_str("TELEGRAM_BOT_TOKEN", "")
     telegram_webapp_url: str = _env_str("TELEGRAM_WEBAPP_URL", "")
+    telegram_admin_webapp_url: str = _env_str("TELEGRAM_ADMIN_WEBAPP_URL", "")
+    telegram_webhook_url: str = _env_str("TELEGRAM_WEBHOOK_URL", "")
+    telegram_bot_webhook_secret: str = _env_str("TELEGRAM_BOT_WEBHOOK_SECRET", "")
     telegram_admin_chat_id: int = _env_int("TELEGRAM_ADMIN_CHAT_ID", 0)
     telegram_admin_user_id: int = _env_int("TELEGRAM_ADMIN_USER_ID", 0)
 
-    # 🔥 главное: если DATABASE_URL не задан ИЛИ задан как пустая строка -> берём дефолт
+    app_log_file: str = _env_str("APP_LOG_FILE", "")
+
+    # -----------------------------
+    # Admin panel (stage 13)
+    # -----------------------------
+    admin_username: str = _env_str("ADMIN_USERNAME", "admin")
+    admin_password: str = _env_str("ADMIN_PASSWORD", "admin")
+    admin_token_secret: str = _env_str("ADMIN_TOKEN_SECRET", "dev-only-change-me")
+    admin_token_version: str = _env_str("ADMIN_TOKEN_VERSION", "1")
+    admin_access_ttl_seconds: int = _env_int("ADMIN_ACCESS_TTL_SECONDS", 15 * 60)  # 15 минут
+    admin_refresh_ttl_seconds: int = _env_int("ADMIN_REFRESH_TTL_SECONDS", 30 * 24 * 60 * 60)  # 30 дней
+
     database_url: str = _env_str("DATABASE_URL", DEFAULT_DATABASE_URL)
 
-    # ✅ алиас — чтобы старый код settings.DATABASE_URL НЕ ЛОМАЛСЯ
     @property
     def DATABASE_URL(self) -> str:
         return self.database_url

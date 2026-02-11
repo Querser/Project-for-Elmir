@@ -1,5 +1,4 @@
-# backend/app/schemas/notification.py
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from datetime import datetime
 from typing import List, Optional
@@ -10,11 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class AdminBroadcastNotificationIn(BaseModel):
     type: str = Field(..., examples=["INFO", "SYSTEM", "TRAINING"])
     text: str = Field(..., min_length=1)
-
-    # В БД title NOT NULL, поэтому даём безопасный default.
-    # Это НЕ ломает клиентов: если они не присылают title — будет "Уведомление".
-    title: str = Field(default="Уведомление", min_length=1)
-
+    title: str = Field(default="\u0423\u0432\u0435\u0434\u043e\u043c\u043b\u0435\u043d\u0438\u0435", min_length=1)
     url: Optional[str] = None
     entity_type: Optional[str] = None
     entity_id: Optional[int] = None
@@ -23,11 +18,18 @@ class AdminBroadcastNotificationIn(BaseModel):
 class AdminTrainingNotificationIn(BaseModel):
     type: str = Field(default="TRAINING")
     text: str = Field(..., min_length=1)
-
-    # Аналогично: безопасный default под NOT NULL (если где-то используется)
-    title: str = Field(default="Уведомление", min_length=1)
-
+    title: str = Field(default="\u0423\u0432\u0435\u0434\u043e\u043c\u043b\u0435\u043d\u0438\u0435", min_length=1)
     url: Optional[str] = None
+
+
+class AdminUserTargetedNotificationIn(BaseModel):
+    user_ids: List[int] = Field(..., min_items=1)
+    type: str = Field(default="SYSTEM")
+    title: str = Field(..., min_length=1)
+    text: str = Field(..., min_length=1)
+    url: Optional[str] = None
+    entity_type: Optional[str] = None
+    entity_id: Optional[int] = None
 
 
 class NotificationOut(BaseModel):
@@ -54,8 +56,6 @@ class NotificationListOut(BaseModel):
 
 
 class AdminCreateNotificationsForTrainingIn(BaseModel):
-    """Admin input: send a notification to all participants of a training."""
-
     training_id: int
     type: str = Field(default="TRAINING")
     title: str = Field(..., min_length=1)
