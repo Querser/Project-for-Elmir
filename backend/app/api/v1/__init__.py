@@ -11,6 +11,7 @@ from app.api.v1 import (
     notifications,
     profile,
     ratings,
+    settings,
     system,
     metrics,
     trainings,
@@ -29,6 +30,7 @@ api_router.include_router(enrollments.router)
 api_router.include_router(levels.router)
 api_router.include_router(ratings.router)
 api_router.include_router(locations_router)
+api_router.include_router(settings.router)
 
 # stage9
 api_router.include_router(notifications.router)

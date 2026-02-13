@@ -4,7 +4,26 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+CANONICAL_LEVEL_NAMES = ('Новичок', 'Средний-', 'Средний', 'Средний+')
+LEVEL_ORDER = {name: idx for idx, name in enumerate(CANONICAL_LEVEL_NAMES)}
+
+
+def _normalize_level_name(value: str | None) -> str | None:
+    if value is None:
+        return None
+    raw = str(value).strip().replace('−', '-')
+    if not raw:
+        return None
+    return raw
+
+
+def _ensure_level_range(min_level_name: str | None, max_level_name: str | None) -> None:
+    if min_level_name is None or max_level_name is None:
+        return
+    if LEVEL_ORDER[min_level_name] > LEVEL_ORDER[max_level_name]:
+        raise ValueError('min_level_name must not be higher than max_level_name')
 
 
 class TrainingBase(BaseModel):
@@ -91,6 +110,21 @@ class TrainingBase(BaseModel):
             raise ValueError('price must be >= 0')
         return round(v, 2)
 
+    @field_validator('min_level_name', 'max_level_name')
+    @classmethod
+    def validate_level_name(cls, v: Optional[str]) -> Optional[str]:
+        normalized = _normalize_level_name(v)
+        if normalized is None:
+            return None
+        if normalized not in CANONICAL_LEVEL_NAMES:
+            raise ValueError(f"level must be one of: {', '.join(CANONICAL_LEVEL_NAMES)}")
+        return normalized
+
+    @model_validator(mode='after')
+    def validate_level_range(self):
+        _ensure_level_range(self.min_level_name, self.max_level_name)
+        return self
+
 
 class TrainingCreate(TrainingBase):
     """
@@ -129,6 +163,21 @@ class TrainingUpdate(BaseModel):
         default=None,
         description='Флаг отмены; обычно лучше использовать отдельный endpoint /cancel',
     )
+
+    @field_validator('min_level_name', 'max_level_name')
+    @classmethod
+    def validate_level_name(cls, v: Optional[str]) -> Optional[str]:
+        normalized = _normalize_level_name(v)
+        if normalized is None:
+            return None
+        if normalized not in CANONICAL_LEVEL_NAMES:
+            raise ValueError(f"level must be one of: {', '.join(CANONICAL_LEVEL_NAMES)}")
+        return normalized
+
+    @model_validator(mode='after')
+    def validate_level_range(self):
+        _ensure_level_range(self.min_level_name, self.max_level_name)
+        return self
 
     class Config:
         extra = 'forbid'

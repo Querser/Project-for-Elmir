@@ -14,6 +14,13 @@ from app.core.config import get_settings
 from app.models.notification import Notification
 from app.models.setting import Setting
 from app.models.user import User
+from app.services.ban_service import get_active_ban
+from app.services.settings_service import (
+    DEFAULT_BAN_TEXT,
+    DEFAULT_CONTACTS_TEXT,
+    DEFAULT_PROMOTIONS_TEXT,
+    DEFAULT_RULES_TEXT,
+)
 from app.services.user_service import get_or_create_user_from_telegram
 
 log = logging.getLogger("app.telegram.bot")
@@ -24,21 +31,10 @@ BOT_BTN_OPEN_ADMIN = "Открыть Админ-панель"
 BOT_BTN_NOTIFICATIONS = "Уведомления"
 BOT_BTN_CONTACTS = "Контакты"
 BOT_BTN_RULES = "Правила"
+BOT_BTN_PROMOTIONS = "Акции"
 BOT_BTN_SHARE_PHONE = "Поделиться номером телефона"
 
 
-DEFAULT_CONTACTS_TEXT = (
-    "Контакты администратора:\n"
-    "Телефон: +7 (000) 000-00-00\n"
-    "Telegram: @elmiravolley"
-)
-
-DEFAULT_RULES_TEXT = (
-    "Правила школы:\n"
-    "1) Приходите за 10-15 минут до начала.\n"
-    "2) При отмене учитывайте ограничение по N часам.\n"
-    "3) Соблюдайте спортивную этику и безопасность."
-)
 
 
 class TelegramBotAPI:
@@ -208,7 +204,12 @@ def _main_menu_keyboard(*, include_admin: bool, miniapp_url: str, admin_url: str
         [
             {"text": BOT_BTN_NOTIFICATIONS},
             {"text": BOT_BTN_CONTACTS},
+        ]
+    )
+    keyboard.append(
+        [
             {"text": BOT_BTN_RULES},
+            {"text": BOT_BTN_PROMOTIONS},
         ]
     )
 
@@ -296,6 +297,9 @@ def _save_avatar_if_possible(db: Session, user: User) -> None:
         return
 
     current = (getattr(user, "avatar_url", None) or "").strip()
+    if current.startswith("/media/avatars/"):
+        # Пользователь установил кастомный аватар в miniapp — не перезаписываем его Telegram-фото.
+        return
     if current == avatar_url:
         return
 
@@ -324,6 +328,7 @@ def _try_fill_missing_name_from_text(db: Session, user: User, text: str) -> bool
         _normalize_text(BOT_BTN_NOTIFICATIONS),
         _normalize_text(BOT_BTN_CONTACTS),
         _normalize_text(BOT_BTN_RULES),
+        _normalize_text(BOT_BTN_PROMOTIONS),
         _normalize_text(BOT_BTN_OPEN_APP),
         _normalize_text(BOT_BTN_OPEN_ADMIN),
         _normalize_text(BOT_BTN_SHARE_PHONE),
@@ -383,6 +388,39 @@ def _send_profile_prompt(db: Session, user: User) -> None:
         return
 
 
+def _format_ban_notice(db: Session, user_id: int) -> str | None:
+    active_ban = get_active_ban(db, user_id=user_id)
+    if active_ban is None:
+        return None
+
+    reason = (getattr(active_ban, "reason", None) or "").strip() or _get_setting_value(
+        db,
+        "ban_text_default",
+        DEFAULT_BAN_TEXT,
+    )
+
+    until = getattr(active_ban, "until", None)
+    if isinstance(until, datetime):
+        until_text = until.astimezone(timezone.utc).strftime("%d.%m.%Y %H:%M UTC")
+        until_line = f"До: {until_text}"
+    else:
+        until_line = "Срок: бессрочно"
+
+    return f"⛔ У вас активный бан.\nПричина: {reason}\n{until_line}"
+
+
+def _send_ban_notice_if_needed(db: Session, user: User) -> None:
+    user_id = int(getattr(user, "id", 0) or 0)
+    tg_id = int(getattr(user, "telegram_id", 0) or 0)
+    if not user_id or not tg_id:
+        return
+
+    text = _format_ban_notice(db, user_id=user_id)
+    if not text:
+        return
+    send_bot_message_to_user(telegram_id=tg_id, text=text)
+
+
 def _send_main_menu(db: Session, user: User) -> None:
     settings = get_settings()
     tg_id = int(getattr(user, "telegram_id", 0))
@@ -396,7 +434,8 @@ def _send_main_menu(db: Session, user: User) -> None:
     send_bot_message_to_user(
         telegram_id=tg_id,
         text=(
-            "Профиль готов. Вы можете открыть Mini App, смотреть уведомления, контакты и правила."
+            "Профиль готов. Вы можете открыть Mini App, смотреть уведомления,"
+            " контакты, правила и акции."
         ),
         reply_markup=keyboard,
     )
@@ -489,6 +528,7 @@ def _handle_text_command(db: Session, user: User, text: str) -> None:
     tg_id = int(getattr(user, "telegram_id", 0))
 
     if normalized in {"/start", "start", "/menu", "menu"}:
+        _send_ban_notice_if_needed(db, user)
         if _is_profile_complete(user):
             _send_main_menu(db, user)
         else:
@@ -507,6 +547,11 @@ def _handle_text_command(db: Session, user: User, text: str) -> None:
     if normalized == _normalize_text(BOT_BTN_RULES):
         rules = _get_setting_value(db, "rules_text", DEFAULT_RULES_TEXT)
         send_bot_message_to_user(telegram_id=tg_id, text=rules)
+        return
+
+    if normalized == _normalize_text(BOT_BTN_PROMOTIONS):
+        promotions = _get_setting_value(db, "promotions_text", DEFAULT_PROMOTIONS_TEXT)
+        send_bot_message_to_user(telegram_id=tg_id, text=promotions)
         return
 
     if not _is_profile_complete(user) and _try_fill_missing_name_from_text(db, user, text):
@@ -583,3 +628,4 @@ def set_bot_webhook(*, webhook_url: str, secret_token: str = "") -> dict[str, An
 
 def delete_bot_webhook() -> dict[str, Any]:
     return _bot_api.delete_webhook()
+

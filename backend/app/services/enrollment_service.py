@@ -11,7 +11,7 @@ from app.policies import CANCEL_MIN_DELTA
 from app.models.training import Training
 from app.models.enrollment import Enrollment, EnrollmentStatus
 from app.models.user import User
-from app.services.ban_service import has_active_ban
+from app.services.ban_service import get_active_ban
 
 
 def _now_aware() -> datetime:
@@ -150,15 +150,20 @@ def _estimate_amount(training: Training, enrollment: Optional[Enrollment] = None
     return 0.0
 
 
-def _is_user_blocked_for_enrollment(db: Session, user_id: int) -> bool:
-    if has_active_ban(db, user_id=user_id):
-        return True
+def _get_enrollment_block_reason(db: Session, user_id: int) -> str | None:
+    active_ban = get_active_ban(db, user_id=user_id)
+    if active_ban is not None:
+        ban_reason = (getattr(active_ban, "reason", None) or "").strip()
+        return ban_reason or "Пользователь находится в бане"
 
     user = db.query(User).filter(User.id == user_id).first()
     if user is None:
         raise AppException.not_found(ErrorCode.USER_NOT_FOUND, f"User {user_id} not found")
 
-    return not bool(getattr(user, "is_active", True))
+    if not bool(getattr(user, "is_active", True)):
+        return "Пользователь деактивирован администратором"
+
+    return None
 
 
 # ---------------------------------------------------------------------
@@ -234,10 +239,11 @@ def enroll_user_to_training(
 ) -> Enrollment:
     training = _get_training(db, training_id)
 
-    if _is_user_blocked_for_enrollment(db, user_id=user_id):
+    blocked_reason = _get_enrollment_block_reason(db, user_id=user_id)
+    if blocked_reason:
         raise AppException.forbidden(
-            message="Пользователь находится в бане и не может записываться на тренировки",
-            details={"user_id": user_id},
+            message=blocked_reason,
+            details={"user_id": user_id, "reason": blocked_reason},
         )
 
     existing = (

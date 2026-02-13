@@ -13,6 +13,19 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 logger = logging.getLogger("app.exceptions")
 
 
+def _json_safe(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, Enum):
+        return _json_safe(getattr(value, "value", str(value)))
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(v) for v in value]
+    # Для Exception и любых не-serializable объектов.
+    return str(value)
+
+
 class ErrorCode(str, Enum):
     # common
     INTERNAL_ERROR = "internal_error"
@@ -139,13 +152,14 @@ def setup_exception_handlers(app) -> None:
 
     @app.exception_handler(RequestValidationError)
     async def _validation_handler(request: Request, exc: RequestValidationError):
+        details = _json_safe(exc.errors())
         return JSONResponse(
             status_code=422,
             content={
                 "error": {
                     "code": ErrorCode.VALIDATION_ERROR.value,
                     "message": "Validation error",
-                    "details": exc.errors(),
+                    "details": details,
                 }
             },
         )

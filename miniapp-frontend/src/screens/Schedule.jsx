@@ -1,12 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { apiFetch } from "../api";
-import TrainingCard from "../components/TrainingCard";
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { apiFetch } from '../api';
+import RefreshButton from '../components/RefreshButton';
+import TrainingCard from '../components/TrainingCard';
 
 const TRAININGS_LIMIT = 200;
 const LOCATIONS_LIMIT = 500;
 
 function pad2(n) {
-  return String(n).padStart(2, "0");
+  return String(n).padStart(2, '0');
 }
 
 function dateKeyLocal(d) {
@@ -26,7 +27,7 @@ function addDays(d, days) {
 }
 
 function dateFromKey(key) {
-  const m = /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/.exec(String(key || ""));
+  const m = /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/.exec(String(key || ''));
   if (!m) return null;
   const y = Number(m[1]);
   const mo = Number(m[2]);
@@ -44,7 +45,7 @@ function parseStartAt(t) {
 }
 
 function formatTime(dt) {
-  return dt ? dt.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" }) : "";
+  return dt ? dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '';
 }
 
 function capFirst(s) {
@@ -68,20 +69,19 @@ function normalizeLocationsResponse(data) {
 }
 
 function normalizeLocationLabel(loc) {
-  if (!loc) return "";
-  const name = loc?.name ?? loc?.title ?? "";
-  const address = loc?.address ?? loc?.addr ?? "";
-  const s = String(name || address || "").trim();
-  return s;
+  if (!loc) return '';
+  const name = loc?.name ?? loc?.title ?? '';
+  const address = loc?.address ?? loc?.addr ?? '';
+  return String(name || address || '').trim();
 }
 
 function normalizeString(v) {
-  if (v == null) return "";
+  if (v == null) return '';
   return String(v).trim().toLowerCase();
 }
 
 function normalizeId(v) {
-  if (v == null) return "";
+  if (v == null) return '';
   const n = Number(v);
   return Number.isFinite(n) ? String(n) : String(v);
 }
@@ -95,7 +95,7 @@ function getTrainingKind(t) {
     t?.training_category ??
     t?.trainingCategory ??
     t?.title ??
-    ""
+    ''
   );
 }
 
@@ -107,24 +107,24 @@ function getTrainingType(t) {
     t?.sport_type ??
     t?.sportType ??
     t?.format ??
-    ""
+    ''
   );
 }
 
 function getTrainingCoach(t) {
-  return t?.coach_name ?? t?.coachName ?? t?.trainer ?? t?.trainer_name ?? t?.trainerName ?? "";
+  return t?.coach_name ?? t?.coachName ?? t?.trainer ?? t?.trainer_name ?? t?.trainerName ?? '';
 }
 
 function getTrainingLocationId(t) {
-  return t?.location_id ?? t?.locationId ?? t?.location?.id ?? "";
+  return t?.location_id ?? t?.locationId ?? t?.location?.id ?? '';
 }
 
 function getTrainingLevelNames(t) {
   const arr = [];
 
-  const min = t?.min_level_name ?? t?.minLevelName ?? "";
-  const max = t?.max_level_name ?? t?.maxLevelName ?? "";
-  const single = t?.level_name ?? t?.levelName ?? "";
+  const min = t?.min_level_name ?? t?.minLevelName ?? '';
+  const max = t?.max_level_name ?? t?.maxLevelName ?? '';
+  const single = t?.level_name ?? t?.levelName ?? '';
   const allowed = t?.allowed_levels ?? t?.allowedLevels ?? null;
 
   if (single) arr.push(single);
@@ -148,7 +148,7 @@ function getTrainingLevelNames(t) {
 
 function isFiltersEmpty(filters) {
   if (!filters) return true;
-  const keys = ["kinds", "types", "locationIds", "coachNames", "levelNames"];
+  const keys = ['kinds', 'types', 'locationIds', 'coachNames', 'levelNames'];
   return keys.every((k) => !Array.isArray(filters[k]) || filters[k].length === 0);
 }
 
@@ -199,17 +199,15 @@ function safeTrainingId(t) {
 
 export default function Schedule({
   filters,
-  refreshKey,   // старый проп
-  refreshTick,  // новый проп (из App.jsx)
+  refreshKey,
+  refreshTick,
   onOpenFilters,
   onOpenTraining,
 }) {
   const [allTrainings, setAllTrainings] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const [error, setError] = useState('');
 
-  // Диапазон дат: месяц назад ↔ месяц вперёд (≈ 31 день в каждую сторону)
-  // Визуально календарь не меняем — просто расширяем набор "дней" в горизонтальной ленте.
   const today = useMemo(() => startOfDay(new Date()), []);
   const daysRange = useMemo(() => {
     const start = addDays(today, -31);
@@ -221,78 +219,67 @@ export default function Schedule({
 
   const effectiveRefresh = refreshTick ?? refreshKey ?? 0;
 
-  useEffect(() => {
-    let cancelled = false;
+  const loadSchedule = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError('');
 
-    (async () => {
+      const trData = await apiFetch(`/api/v1/trainings?skip=0&limit=${TRAININGS_LIMIT}`);
+      const trainings = normalizeTrainingsResponse(trData);
+
+      let locMap = {};
       try {
-        setLoading(true);
-        setError("");
+        const locData = await apiFetch(`/api/v1/locations?limit=${LOCATIONS_LIMIT}&offset=0&only_with_trainings=true`);
+        const locItems = normalizeLocationsResponse(locData);
 
-        // 1) Trainings (ВАЖНО: limit <= 200)
-        const trData = await apiFetch(`/api/v1/trainings?skip=0&limit=${TRAININGS_LIMIT}`);
-        const trainings = normalizeTrainingsResponse(trData);
+        const map = {};
+        for (const loc of locItems) {
+          const id = loc?.id ?? loc?.location_id ?? loc?.locationId ?? null;
+          if (id == null) continue;
+          const label = normalizeLocationLabel(loc);
+          if (!map[String(id)]) map[String(id)] = label || '';
+        }
+        locMap = map;
+      } catch (e) {
+        void e;
+      }
 
-        // 2) Locations map
-        let locMap = {};
-        try {
-          const locData = await apiFetch(`/api/v1/locations?limit=${LOCATIONS_LIMIT}&offset=0&only_with_trainings=true`);
-          const locItems = normalizeLocationsResponse(locData);
+      const enriched = trainings.map((t) => {
+        const locationId = getTrainingLocationId(t);
+        const label = locationId ? (locMap[String(locationId)] || '') : '';
 
-          const map = {};
-          for (const loc of locItems) {
-            const id = loc?.id ?? loc?.location_id ?? loc?.locationId ?? null;
-            if (id == null) continue;
-            const label = normalizeLocationLabel(loc);
-            if (!map[String(id)]) map[String(id)] = label || "";
-          }
-          locMap = map;
-        } catch (e) {
-          void e;
+        const baseLocation =
+          (t?.location ?? null) ??
+          (t?.location_name ?? null) ??
+          (t?.locationName ?? null) ??
+          (t?.location_label ?? null) ??
+          null;
+
+        let locationText = '';
+        if (baseLocation != null && String(baseLocation).trim() !== '') {
+          locationText = String(baseLocation).trim();
+        } else if (label && String(label).trim() !== '') {
+          locationText = String(label).trim();
         }
 
-        if (cancelled) return;
+        return {
+          ...t,
+          location_label: label,
+          location: locationText,
+        };
+      });
 
-        // 3) Enrich trainings with location_label / location text
-        const enriched = trainings.map((t) => {
-          const locationId = getTrainingLocationId(t);
-          const label = locationId ? (locMap[String(locationId)] || "") : "";
+      setAllTrainings(enriched);
+    } catch (err) {
+      setError(err?.message || 'Ошибка загрузки расписания');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-          const baseLocation =
-            (t?.location ?? null) ??
-            (t?.location_name ?? null) ??
-            (t?.locationName ?? null) ??
-            (t?.location_label ?? null) ??
-            null;
-
-          let locationText = "";
-          if (baseLocation != null && String(baseLocation).trim() !== "") {
-            locationText = String(baseLocation).trim();
-          } else if (label && String(label).trim() !== "") {
-            locationText = String(label).trim();
-          } else {
-            locationText = "";
-          }
-
-          return {
-            ...t,
-            location_label: label,
-            location: locationText,
-          };
-        });
-
-        setAllTrainings(enriched);
-      } catch (err) {
-        if (!cancelled) setError(err?.message || "Ошибка загрузки расписания");
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [effectiveRefresh]);
+  useEffect(() => {
+    loadSchedule();
+  }, [effectiveRefresh, loadSchedule]);
 
   const trainingsFiltered = useMemo(() => applyFilters(allTrainings, filters), [allTrainings, filters]);
 
@@ -307,22 +294,21 @@ export default function Schedule({
 
   const dayLabel = useMemo(() => {
     const found = daysRange.find((d) => dateKeyLocal(d) === selectedDay) || dateFromKey(selectedDay) || new Date();
-    return capFirst(found.toLocaleDateString("ru-RU", { weekday: "long", day: "numeric", month: "long" }));
+    return capFirst(found.toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' }));
   }, [selectedDay, daysRange]);
 
-  // При выборе даты прокручиваем ленту так, чтобы выбранный день был виден.
   useEffect(() => {
     const root = weekStripRef.current;
     if (!root) return;
     const btn = root.querySelector(`[data-day="${selectedDay}"]`);
-    if (btn && typeof btn.scrollIntoView === "function") {
-      btn.scrollIntoView({ block: "nearest", inline: "center" });
+    if (btn && typeof btn.scrollIntoView === 'function') {
+      btn.scrollIntoView({ block: 'nearest', inline: 'center' });
     }
   }, [selectedDay]);
 
   const activeFiltersCount = useMemo(() => {
     if (!filters) return 0;
-    return ["kinds", "types", "locationIds", "coachNames", "levelNames"].reduce((acc, k) => {
+    return ['kinds', 'types', 'locationIds', 'coachNames', 'levelNames'].reduce((acc, k) => {
       const v = filters[k];
       return acc + (Array.isArray(v) ? v.length : 0);
     }, 0);
@@ -332,18 +318,7 @@ export default function Schedule({
     <>
       <div className="topbar">
         <h1 className="topbar-title">Расписание</h1>
-        <button className="icon-btn" id="btn-fullscreen" type="button" aria-label="fullscreen">
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            fill="none"
-            viewBox="0 0 24 24"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path d="M8 5H5v3M16 5h3v3M8 19H5v-3M16 19h3v-3" />
-          </svg>
-        </button>
+        <RefreshButton onClick={loadSchedule} />
       </div>
 
       <div className="week-strip" ref={weekStripRef}>
@@ -354,11 +329,11 @@ export default function Schedule({
             <button
               key={key}
               type="button"
-              className={`week-day ${isSelected ? "active" : ""}`}
+              className={`week-day ${isSelected ? 'active' : ''}`}
               onClick={() => setSelectedDay(key)}
               data-day={key}
             >
-              <span>{d.toLocaleDateString("ru-RU", { weekday: "short" }).toUpperCase()}</span>
+              <span>{d.toLocaleDateString('ru-RU', { weekday: 'short' }).toUpperCase()}</span>
               <span className="date">{d.getDate()}</span>
             </button>
           );
@@ -379,7 +354,7 @@ export default function Schedule({
           >
             <path d="M4 5h16M7 12h10M10 19h4" />
           </svg>
-          Фильтры{activeFiltersCount > 0 ? ` (${activeFiltersCount})` : ""}
+          Фильтры{activeFiltersCount > 0 ? ` (${activeFiltersCount})` : ''}
         </button>
       </div>
 
@@ -406,7 +381,7 @@ export default function Schedule({
               const id = safeTrainingId(t);
               return (
                 <TrainingCard
-                  key={id ?? `${t?.title ?? "training"}-${parseStartAt(t)?.toISOString() ?? ""}`}
+                  key={id ?? `${t?.title ?? 'training'}-${parseStartAt(t)?.toISOString() ?? ''}`}
                   training={t}
                   onClick={() => (id ? onOpenTraining?.(id) : null)}
                   timeLabel={formatTime(parseStartAt(t))}

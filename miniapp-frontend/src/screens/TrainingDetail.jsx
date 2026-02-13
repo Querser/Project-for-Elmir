@@ -17,7 +17,7 @@ function maybeFixUtf8Mojibake(value) {
     const bytes = new Uint8Array([...s].map((ch) => ch.charCodeAt(0)));
     const decoded = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
     // если после декода появилась кириллица — значит стало лучше
-    if (/[А-Яа-яЁё]/.test(decoded)) return decoded;
+    if (/[\u0400-\u04FF]/.test(decoded)) return decoded;
     return s;
   } catch {
     return s;
@@ -168,6 +168,7 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
 
   const [bookingOpen, setBookingOpen] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
+  const [banInfoOpen, setBanInfoOpen] = useState(false);
 
   const openExternalLink = (url) => {
     if (!url) return;
@@ -363,6 +364,11 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
   const canEnroll = Boolean(training?.can_enroll);
   const canEnrollReserve = Boolean(training?.can_enroll_reserve);
   const isReserveAvailable = Boolean(training?.is_reserve_available);
+  const userHasActiveBan = Boolean(training?.user_has_active_ban);
+  const userBanReason = maybeFixUtf8Mojibake(
+    training?.user_active_ban_reason || training?.user_active_ban_text || '',
+  ).toString().trim();
+  const userBanUntil = useMemo(() => parseDate(training?.user_active_ban_until), [training]);
 
   const cancelDeadlineAt = useMemo(() => parseDate(training?.cancel_deadline_at), [training]);
 
@@ -459,18 +465,20 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
 
   const enrollButtonLabel = useMemo(() => {
     if (isEnrolled) return 'Отменить запись';
+    if (userHasActiveBan) return 'Вы в бане';
     if (canEnroll) return 'Записаться';
     if (canEnrollReserve && isReserveAvailable) return 'Записаться в резерв';
     return 'Запись недоступна';
-  }, [isEnrolled, canEnroll, canEnrollReserve, isReserveAvailable]);
+  }, [isEnrolled, userHasActiveBan, canEnroll, canEnrollReserve, isReserveAvailable]);
 
   const enrollButtonDisabled = useMemo(() => {
     if (loading || saving) return true;
     if (isEnrolled) return !canCancel;
+    if (userHasActiveBan) return false;
     if (canEnroll) return false;
     if (canEnrollReserve && isReserveAvailable) return false;
     return true;
-  }, [loading, saving, isEnrolled, canCancel, canEnroll, canEnrollReserve, isReserveAvailable]);
+  }, [loading, saving, isEnrolled, canCancel, userHasActiveBan, canEnroll, canEnrollReserve, isReserveAvailable]);
 
   const priceLabel = useMemo(() => {
     const p = training?.final_price ?? training?.price;
@@ -485,6 +493,12 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
       setCancelOpen(true);
       return;
     }
+
+    if (userHasActiveBan) {
+      setBanInfoOpen(true);
+      return;
+    }
+
     if (canEnroll || (canEnrollReserve && isReserveAvailable)) {
       setBookingOpen(true);
     }
@@ -548,11 +562,11 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
         {loading ? (
           <div className="loader">Загрузка…</div>
         ) : error ? (
-          <div className="empty-state" style={{ marginTop: 18 }}>
-            <div className="empty-ico">⚠️</div>
-            <h3>Ошибка</h3>
-            <p>{error}</p>
-          </div>
+            <div className="empty-state" style={{ marginTop: 18 }}>
+              <div className="empty-ico">⚠️</div>
+              <h3>Ошибка</h3>
+              <p>{error}</p>
+            </div>
         ) : training ? (
           <>
             <div className="hero-image" style={{ backgroundImage: `url(${img})` }}>
@@ -563,9 +577,10 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
                   </svg>
                 </button>
 
-                <button className="icon-btn" type="button" aria-label="Статус" disabled>
+                <button className="icon-btn" type="button" aria-label="Обновить" onClick={load}>
                   <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <path strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" d="M18 8l-6 6-3-3" />
+                    <path strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" d="M4 4v6h6M20 20v-6h-6" />
+                    <path strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" d="M20 8a8 8 0 0 0-14.8-3M4 16a8 8 0 0 0 14.8 3" />
                   </svg>
                 </button>
               </div>
@@ -727,6 +742,11 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
                   {cancelBlockedHint}
                 </p>
               ) : null}
+              {userHasActiveBan ? (
+                <p className="hint" style={{ color: 'var(--danger)' }}>
+                  У вас активный бан. Нажмите кнопку записи, чтобы посмотреть причину.
+                </p>
+              ) : null}
             </div>
 
             <button className="primary-btn" type="button" onClick={openEnrollFlow} disabled={enrollButtonDisabled}>
@@ -745,6 +765,28 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
           </>
         ) : null}
       </section>
+
+      {banInfoOpen ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true">
+          <div className="modal">
+            <div className="modal-title">Запись недоступна</div>
+            <div className="modal-body">
+              <p>Ваш аккаунт находится в бане.</p>
+              <p style={{ marginTop: 8 }}>
+                Причина: <strong>{userBanReason || 'Причина не указана'}</strong>
+              </p>
+              <p style={{ marginTop: 8 }}>
+                До: <strong>{userBanUntil ? userBanUntil.toLocaleString('ru-RU') : 'бессрочно'}</strong>
+              </p>
+            </div>
+            <div className="modal-actions">
+              <button className="primary-btn" type="button" onClick={() => setBanInfoOpen(false)}>
+                Понятно
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {bookingOpen ? (
         <div className="modal-backdrop" role="dialog" aria-modal="true">
@@ -804,3 +846,7 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
     </>
   );
 }
+
+
+
+

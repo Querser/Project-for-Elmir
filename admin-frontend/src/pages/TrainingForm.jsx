@@ -9,8 +9,15 @@ import { fromDatetimeLocalValue, toDatetimeLocalValue } from '../lib/format.js';
 import { navigate } from '../lib/router.js';
 import { useToast } from '../components/Toast.jsx';
 import { ensureSession, getAdminTokens } from '../lib/adminAuth.js';
+import { CANONICAL_LEVEL_NAMES, normalizeLevelName } from '../lib/levels.js';
 
 const MAX_UPLOAD_MB = 50;
+const DEFAULT_MIN_LEVEL = CANONICAL_LEVEL_NAMES[0];
+const DEFAULT_MAX_LEVEL = CANONICAL_LEVEL_NAMES[CANONICAL_LEVEL_NAMES.length - 1];
+
+function resolveTrainingLevelName(value, fallback) {
+  return normalizeLevelName(value) || fallback;
+}
 
 function normalizeNumber(value, fallback = 0) {
   if (value == null || value === '') return fallback;
@@ -105,8 +112,8 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
     description: '',
     start_at_local: '',
     duration_minutes: 90,
-    min_level_name: 'Beginner',
-    max_level_name: 'Intermediate',
+    min_level_name: DEFAULT_MIN_LEVEL,
+    max_level_name: DEFAULT_MAX_LEVEL,
     price: 0,
     capacity_main: 12,
     capacity_reserve: 12,
@@ -161,6 +168,16 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
       nextErrors.capacity_reserve = 'Вместимость резерва должна быть числом >= 0';
     }
 
+    const minIndex = CANONICAL_LEVEL_NAMES.indexOf(form.min_level_name);
+    const maxIndex = CANONICAL_LEVEL_NAMES.indexOf(form.max_level_name);
+    if (minIndex < 0 || maxIndex < 0) {
+      nextErrors.min_level_name = 'Выберите уровни из списка';
+      nextErrors.max_level_name = 'Выберите уровни из списка';
+    } else if (minIndex > maxIndex) {
+      nextErrors.min_level_name = 'Минимальный уровень не может быть выше максимального';
+      nextErrors.max_level_name = 'Максимальный уровень должен быть не ниже минимального';
+    }
+
     if (!selectedLocationId && !form.location_name.trim()) {
       nextErrors.location_name = 'Выберите локацию из списка или введите новую';
     }
@@ -195,8 +212,8 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
         description: fromState.description || '',
         start_at_local: toDatetimeLocalValue(fromState.start_at),
         duration_minutes: fromState.duration_minutes || 90,
-        min_level_name: fromState.min_level_name || 'Beginner',
-        max_level_name: fromState.max_level_name || 'Intermediate',
+        min_level_name: resolveTrainingLevelName(fromState.min_level_name, DEFAULT_MIN_LEVEL),
+        max_level_name: resolveTrainingLevelName(fromState.max_level_name, DEFAULT_MAX_LEVEL),
         price: fromState.price ?? 0,
         capacity_main: fromState.capacity_main ?? 0,
         capacity_reserve: fromState.capacity_reserve ?? 0,
@@ -220,8 +237,8 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
         description: data.description || '',
         start_at_local: toDatetimeLocalValue(data.start_at),
         duration_minutes: data.duration_minutes || 90,
-        min_level_name: data.min_level_name || 'Beginner',
-        max_level_name: data.max_level_name || 'Intermediate',
+        min_level_name: resolveTrainingLevelName(data.min_level_name, DEFAULT_MIN_LEVEL),
+        max_level_name: resolveTrainingLevelName(data.max_level_name, DEFAULT_MAX_LEVEL),
         price: data.price ?? 0,
         capacity_main: data.capacity_main ?? 0,
         capacity_reserve: data.capacity_reserve ?? 0,
@@ -384,12 +401,20 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
               />
             </Field>
 
-            <Field label="Минимальный уровень">
-              <Input value={form.min_level_name} onChange={(e) => setField('min_level_name', e.target.value)} />
+            <Field label="Минимальный уровень" error={errors.min_level_name}>
+              <Select value={form.min_level_name} onChange={(e) => setField('min_level_name', e.target.value)}>
+                {CANONICAL_LEVEL_NAMES.map((name) => (
+                  <option key={name} value={name}>{name}</option>
+                ))}
+              </Select>
             </Field>
 
-            <Field label="Максимальный уровень">
-              <Input value={form.max_level_name} onChange={(e) => setField('max_level_name', e.target.value)} />
+            <Field label="Максимальный уровень" error={errors.max_level_name}>
+              <Select value={form.max_level_name} onChange={(e) => setField('max_level_name', e.target.value)}>
+                {CANONICAL_LEVEL_NAMES.map((name) => (
+                  <option key={name} value={name}>{name}</option>
+                ))}
+              </Select>
             </Field>
 
             <Field label="Тренер">

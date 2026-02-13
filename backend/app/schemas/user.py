@@ -1,7 +1,7 @@
 # app/schemas/user.py
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator, ConfigDict, AliasChoices
@@ -28,6 +28,9 @@ class UserProfile(BaseModel):
     gender: Optional[str] = None
     birth_date: Optional[date] = None
     is_telegram_public: bool
+    has_active_ban: bool = False
+    active_ban_reason: Optional[str] = None
+    active_ban_until: Optional[datetime] = None
 
     payer_id: Optional[str] = None
     card_last4: Optional[str] = None

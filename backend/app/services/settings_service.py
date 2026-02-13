@@ -7,18 +7,33 @@ from sqlalchemy.orm import Session
 from app.models.setting import Setting
 
 
+DEFAULT_BAN_TEXT = "У вас бан. Обратитесь к администратору."
+DEFAULT_CONTACTS_TEXT = (
+    "Контакты администратора:\n"
+    "Телефон: +7 (000) 000-00-00\n"
+    "Telegram: @elmiravolley"
+)
+DEFAULT_RULES_TEXT = (
+    "Правила школы:\n"
+    "1) Приходите заранее.\n"
+    "2) Учитывайте срок отмены.\n"
+    "3) Соблюдайте уважительное общение."
+)
+DEFAULT_PROMOTIONS_TEXT = (
+    "Актуальные акции и предложения:\n"
+    "1) Скидка на первое посещение.\n"
+    "2) Бонусы за регулярные тренировки.\n"
+    "3) Специальные условия на абонементы."
+)
+
+
 DEFAULT_SETTINGS: dict[str, tuple[str, str]] = {
     "cancel_hours_before_training": ("4", "Hours before training when cancellation is forbidden"),
     "autoban_hours_before_training": ("2", "Hours before training for autoban on unpaid enrollment"),
-    "ban_text_default": ("У вас бан. Обратитесь к администратору.", "Default text for banned users"),
-    "contacts_text": (
-        "Контакты администратора:\nТелефон: +7 (000) 000-00-00\nTelegram: @elmiravolley",
-        "Text for Telegram bot Contacts button",
-    ),
-    "rules_text": (
-        "Правила школы:\n1) Приходите заранее.\n2) Учитывайте срок отмены.\n3) Соблюдайте уважительное общение.",
-        "Text for Telegram bot Rules button",
-    ),
+    "ban_text_default": (DEFAULT_BAN_TEXT, "Default text for banned users"),
+    "contacts_text": (DEFAULT_CONTACTS_TEXT, "Shared text for Contacts section (bot + miniapp)"),
+    "rules_text": (DEFAULT_RULES_TEXT, "Shared text for Rules section (bot + miniapp)"),
+    "promotions_text": (DEFAULT_PROMOTIONS_TEXT, "Shared text for Promotions section (bot + miniapp)"),
 }
 
 
@@ -80,4 +95,3 @@ class SettingsService:
     def get_str(db: Session, key: str, default: str) -> str:
         row = SettingsService.get(db, key)
         return row.value if row else default
-

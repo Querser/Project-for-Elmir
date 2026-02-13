@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { apiFetch } from '../api';
+import RefreshButton from '../components/RefreshButton';
 
 function normalizeItems(data) {
   if (!data) return [];
@@ -20,15 +21,46 @@ function formatWhen(dt) {
   return dt.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
+function normalizeText(value) {
+  if (value == null) return '';
+  return String(value).trim();
+}
+
+function unique(list) {
+  return Array.from(new Set(list.filter(Boolean)));
+}
+
+function openExternal(url) {
+  const href = normalizeText(url);
+  if (!href) return;
+
+  try {
+    const tg = typeof window !== 'undefined' ? window.Telegram?.WebApp : null;
+    if (tg?.openLink) {
+      tg.openLink(href);
+      return;
+    }
+  } catch (e) {
+    void e;
+  }
+
+  try {
+    window.open(href, '_blank', 'noopener,noreferrer');
+  } catch (e) {
+    void e;
+  }
+}
+
 export default function Notifications() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [total, setTotal] = useState(null);
+  const [expandedIds, setExpandedIds] = useState([]);
 
   const LIMIT = 50;
 
-  const load = async (opts = {}) => {
+  const load = useCallback(async (opts = {}) => {
     const { offset = 0, append = false } = opts;
     try {
       setLoading(true);
@@ -37,34 +69,19 @@ export default function Notifications() {
       const next = normalizeItems(data);
       setTotal(typeof data?.total === 'number' ? data.total : null);
       setItems((prev) => (append ? [...prev, ...next] : next));
+      if (!append) {
+        setExpandedIds([]);
+      }
     } catch (err) {
       setError(err?.message || 'Не удалось загрузить уведомления');
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        setLoading(true);
-        setError('');
-        const data = await apiFetch(`/api/v1/notifications?offset=0&limit=${LIMIT}`);
-        if (cancelled) return;
-        setTotal(typeof data?.total === 'number' ? data.total : null);
-        setItems(normalizeItems(data));
-      } catch (err) {
-        if (cancelled) return;
-        setError(err?.message || 'Не удалось загрузить уведомления');
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    load({ offset: 0, append: false });
+  }, [load]);
 
   const sorted = useMemo(() => {
     const arr = [...items];
@@ -76,7 +93,7 @@ export default function Notifications() {
     return arr;
   }, [items]);
 
-  const markRead = async (id) => {
+  const markRead = useCallback(async (id) => {
     if (!id) return;
     try {
       await apiFetch(`/api/v1/notifications/${id}/read`, { method: 'POST' });
@@ -88,9 +105,8 @@ export default function Notifications() {
       );
     } catch (err) {
       void err;
-      await load({ offset: 0, append: false });
     }
-  };
+  }, []);
 
   const canLoadMore = useMemo(() => {
     if (loading) return false;
@@ -103,11 +119,30 @@ export default function Notifications() {
     await load({ offset: items.length, append: true });
   };
 
+  const toggleExpanded = (id) => {
+    if (!id) return;
+    setExpandedIds((prev) => {
+      if (prev.includes(id)) return prev.filter((x) => x !== id);
+      return unique([...prev, id]);
+    });
+  };
+
+  const onNotificationClick = async (item) => {
+    const id = item?.id ?? null;
+    if (!id) return;
+
+    const isRead = Boolean(item?.is_read ?? item?.isRead);
+    toggleExpanded(id);
+    if (!isRead) {
+      await markRead(id);
+    }
+  };
+
   return (
     <>
       <header className="topbar">
         <h1 className="topbar-title">Уведомления</h1>
-        <div style={{ width: 36 }} />
+        <RefreshButton onClick={() => load({ offset: 0, append: false })} />
       </header>
 
       <div className="content">
@@ -129,33 +164,52 @@ export default function Notifications() {
               <p>Здесь появятся уведомления об изменениях и записях на тренировки.</p>
             </div>
           ) : (
-            <div className="settings-list" style={{ marginTop: 10 }}>
+            <div className="notifications-list">
               {sorted.map((n) => {
                 const id = n?.id ?? null;
-                const title = n?.title ?? n?.subject ?? 'Уведомление';
-                const text = n?.message ?? n?.text ?? n?.body ?? '';
+                const title = normalizeText(n?.title ?? n?.subject) || 'Уведомление';
+                const text = normalizeText(n?.message ?? n?.text ?? n?.body);
+                const url = normalizeText(n?.url);
                 const created = parseDate(n?.created_at ?? n?.createdAt);
                 const isRead = Boolean(n?.is_read ?? n?.isRead);
+                const isExpanded = id != null && expandedIds.includes(id);
 
                 return (
-                  <div
+                  <button
                     key={id ?? `${title}-${created?.toISOString() ?? ''}`}
-                    className="settings-item"
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => markRead(id)}
+                    className={`notification-item ${isExpanded ? 'expanded' : ''}`}
+                    type="button"
+                    onClick={() => onNotificationClick(n)}
                   >
-                    <div className="settings-item-left">
-                      <div className="settings-icon" style={{ background: isRead ? '#f3f4f6' : '#eff6ff' }}>
-                        {isRead ? '🔔' : '🟦'}
+                    <div className="notification-row">
+                      <div className="notification-title-wrap">
+                        <span className={`notification-dot ${isRead ? 'read' : 'unread'}`} aria-hidden="true" />
+                        <span className="notification-title">{title}</span>
                       </div>
-                      <div>
-                        <div className="settings-label">{title}</div>
-                        <div className="settings-value">{text ? text : formatWhen(created)}</div>
-                      </div>
+                      <span className="notification-date">{formatWhen(created)}</span>
                     </div>
-                    <div className="settings-value">{formatWhen(created)}</div>
-                  </div>
+
+                    <div className={`notification-text ${isExpanded ? 'expanded' : 'collapsed'}`}>
+                      {text || formatWhen(created)}
+                    </div>
+
+                    {isExpanded && url ? (
+                      <div className="notification-link-wrap">
+                        <span className="notification-link-label">Ссылка:</span>
+                        <a
+                          href={url}
+                          className="notification-link"
+                          onClick={(ev) => {
+                            ev.preventDefault();
+                            ev.stopPropagation();
+                            openExternal(url);
+                          }}
+                        >
+                          {url}
+                        </a>
+                      </div>
+                    ) : null}
+                  </button>
                 );
               })}
 

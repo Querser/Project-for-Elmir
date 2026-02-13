@@ -68,20 +68,28 @@ const SETTING_FIELDS = [
     defaultValue: 'true',
     description: 'Глобальный флаг включения/отключения приема оплат.',
   },
-  {
+    {
     key: 'contacts_text',
-    label: 'Текст раздела «Контакты» для Telegram-бота',
+    label: 'Текст раздела «Контакты» для Telegram-бота и miniapp',
     type: 'textarea',
     defaultValue: 'Контакты администратора:\nТелефон: +7 (000) 000-00-00\nTelegram: @elmiravolley',
-    description: 'Текст, который бот показывает по кнопке «Контакты».',
+    description: 'Единый текст раздела «Контакты» для бота и miniapp.',
   },
   {
     key: 'rules_text',
-    label: 'Текст раздела «Правила» для Telegram-бота',
+    label: 'Текст раздела «Правила» для Telegram-бота и miniapp',
     type: 'textarea',
     defaultValue:
       'Правила школы:\n1) Приходите заранее.\n2) Учитывайте срок отмены.\n3) Соблюдайте уважительное общение.',
-    description: 'Текст, который бот показывает по кнопке «Правила».',
+    description: 'Единый текст раздела «Правила» для бота и miniapp.',
+  },
+  {
+    key: 'promotions_text',
+    label: 'Текст раздела «Акции» для Telegram-бота и miniapp',
+    type: 'textarea',
+    defaultValue:
+      'Актуальные акции и предложения:\n1) Скидка на первое посещение.\n2) Бонусы за регулярные тренировки.\n3) Специальные условия на абонементы.',
+    description: 'Единый текст раздела «Акции» для бота и miniapp.',
   },
 
 ];

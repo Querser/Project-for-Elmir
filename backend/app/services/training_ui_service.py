@@ -5,7 +5,8 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session
 
 from app.services.policies import cancel_deadline_at, pick_price_for_user, is_late_cancel
-from app.services.ban_service import has_active_ban
+from app.models.setting import Setting
+from app.services.ban_service import get_active_ban
 
 # Пытаемся подцепить твою модель price tiers (как ты её назвал в новых файлах)
 PriceTierModel = None
@@ -44,6 +45,17 @@ def _safe_text(v: Any) -> str:
         return str(v).strip()
     except Exception:
         return ""
+
+
+def _get_setting_value(db: Session, key: str, default: str) -> str:
+    try:
+        row = db.query(Setting).filter(Setting.key == key).one_or_none()
+    except Exception:
+        return default
+    if row is None:
+        return default
+    value = _safe_text(getattr(row, "value", None))
+    return value or default
 
 
 def _participant_payload(enrollment: Any, *, is_reserve: bool) -> dict[str, Any]:
@@ -170,10 +182,25 @@ def build_training_ui_payload(
     can_enroll = False
     can_enroll_reserve = False
     user_has_active_ban = False
+    user_active_ban_reason: str | None = None
+    user_active_ban_until = None
+    user_active_ban_text: str | None = None
     if user is not None and user_enrollment_status in ("none", "", "cancelled", "canceled"):
         user_id = getattr(user, "id", None)
         if user_id is not None:
-            user_has_active_ban = has_active_ban(db, int(user_id))
+            active_ban = get_active_ban(db, int(user_id))
+            user_has_active_ban = active_ban is not None
+            if active_ban is not None:
+                user_active_ban_reason = _safe_text(getattr(active_ban, "reason", None)) or None
+                user_active_ban_until = getattr(active_ban, "until", None)
+                user_active_ban_text = (
+                    user_active_ban_reason
+                    or _get_setting_value(
+                        db,
+                        "ban_text_default",
+                        "У вас бан. Обратитесь к администратору.",
+                    )
+                )
 
         if not user_has_active_ban:
             can_enroll = free_places > 0
@@ -194,6 +221,9 @@ def build_training_ui_payload(
         "can_enroll_reserve": can_enroll_reserve,
         "is_reserve_available": is_reserve_available,
         "user_has_active_ban": user_has_active_ban,
+        "user_active_ban_reason": user_active_ban_reason,
+        "user_active_ban_until": user_active_ban_until,
+        "user_active_ban_text": user_active_ban_text,
         "user_enrollment_status": user_enrollment_status,
         "user_queue_position": user_queue_position,
         "user_enrollment_id": user_enrollment_id,

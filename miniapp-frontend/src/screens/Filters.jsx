@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { apiFetch } from '../api';
+import RefreshButton from '../components/RefreshButton';
 
 function normalizeItems(data) {
   if (!data) return [];
@@ -36,6 +37,7 @@ export default function Filters({ initialFilters, onApply, onBack }) {
   const [types, setTypes] = useState([]);
 
   const [loading, setLoading] = useState(true);
+  const [reloadTick, setReloadTick] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -79,7 +81,7 @@ export default function Filters({ initialFilters, onApply, onBack }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [reloadTick]);
 
   const viewKinds = useMemo(() => kinds.slice(0, 8), [kinds]);
   const viewCoaches = useMemo(() => coaches.slice(0, 12), [coaches]);
@@ -102,7 +104,7 @@ export default function Filters({ initialFilters, onApply, onBack }) {
           </svg>
         </button>
         <h1 className="topbar-title">Фильтры</h1>
-        <div style={{ width: 36 }} />
+        <RefreshButton onClick={() => setReloadTick((prev) => prev + 1)} />
       </header>
 
       <div className="content">

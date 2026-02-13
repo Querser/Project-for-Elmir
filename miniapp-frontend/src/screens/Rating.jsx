@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { apiFetch, extractItems } from "../api";
+import RefreshButton from "../components/RefreshButton";
 
 // Уровни строго по ТЗ
 const LEVEL_TABS = [
@@ -132,6 +133,7 @@ export default function Rating() {
   const [playerModalLoading, setPlayerModalLoading] = useState(false);
   const [playerModalError, setPlayerModalError] = useState("");
   const [playerModalProfile, setPlayerModalProfile] = useState(null);
+  const [reloadTick, setReloadTick] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -173,7 +175,7 @@ export default function Rating() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [reloadTick]);
 
   const prepared = useMemo(() => {
     return (ratings || []).map((it, idx) => {
@@ -321,7 +323,7 @@ export default function Rating() {
     <div className="screen active">
       <div className="topbar">
         <h1 className="topbar-title">Рейтинг</h1>
-        <div style={{ width: 40 }} />
+        <RefreshButton onClick={() => setReloadTick((prev) => prev + 1)} />
       </div>
 
       <div className="rating-tabs">

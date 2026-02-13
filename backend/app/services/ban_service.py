@@ -18,18 +18,22 @@ def _active_until_filter(now: datetime):
     return (Ban.active.is_(True)) & (or_(Ban.until.is_(None), Ban.until >= now))
 
 
+def get_active_ban(db: Session, user_id: int) -> Ban | None:
+    now = _now_utc()
+    return (
+        db.query(Ban)
+        .filter(Ban.user_id == user_id)
+        .filter(_active_until_filter(now))
+        .order_by(Ban.created_at.desc(), Ban.id.desc())
+        .first()
+    )
+
+
 def has_active_ban(db: Session, user_id: int) -> bool:
     """
     Имя ожидает enrollment_service.py
     """
-    now = _now_utc()
-    return (
-        db.query(Ban.id)
-        .filter(Ban.user_id == user_id)
-        .filter(_active_until_filter(now))
-        .first()
-        is not None
-    )
+    return get_active_ban(db, user_id=user_id) is not None
 
 
 # ---- Backward-compatible aliases (на случай старых импортов) ----

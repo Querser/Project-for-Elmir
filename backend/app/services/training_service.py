@@ -9,7 +9,9 @@ from sqlalchemy.orm import Session
 from app.core.exceptions import AppException, ErrorCode
 from app.models.location import Location
 from app.models.training import Training
-from app.schemas.training import TrainingCreate, TrainingUpdate
+from app.schemas.training import CANONICAL_LEVEL_NAMES, TrainingCreate, TrainingUpdate
+
+_LEVEL_ORDER = {name: idx for idx, name in enumerate(CANONICAL_LEVEL_NAMES)}
 
 
 def get_training_or_404(db: Session, training_id: int) -> Training:
@@ -47,7 +49,36 @@ def _resolve_location_id(
     return location_id
 
 
+def _validate_level_range(
+    *,
+    min_level_name: str | None,
+    max_level_name: str | None,
+) -> None:
+    if min_level_name is None or max_level_name is None:
+        return
+
+    min_idx = _LEVEL_ORDER.get(min_level_name)
+    max_idx = _LEVEL_ORDER.get(max_level_name)
+    if min_idx is None or max_idx is None:
+        # Допустимые значения уже валидируются Pydantic-схемой.
+        return
+
+    if min_idx > max_idx:
+        raise AppException.validation(
+            message='Минимальный уровень не может быть выше максимального',
+            details={
+                'min_level_name': min_level_name,
+                'max_level_name': max_level_name,
+            },
+        )
+
+
 def create_training(db: Session, data: TrainingCreate) -> Training:
+    _validate_level_range(
+        min_level_name=data.min_level_name,
+        max_level_name=data.max_level_name,
+    )
+
     resolved_location_id = _resolve_location_id(
         db,
         location_id=data.location_id,
@@ -87,6 +118,13 @@ def update_training(db: Session, training: Training, data: TrainingUpdate) -> Tr
             location_id=location_id,
             location_name=location_name,
         )
+
+    next_min_level = update_data.get('min_level_name', getattr(training, 'min_level_name', None))
+    next_max_level = update_data.get('max_level_name', getattr(training, 'max_level_name', None))
+    _validate_level_range(
+        min_level_name=next_min_level,
+        max_level_name=next_max_level,
+    )
 
     for field, value in update_data.items():
         if not hasattr(training, field):

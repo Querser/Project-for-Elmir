@@ -4,11 +4,12 @@ import Card from '../components/Card.jsx';
 import Button from '../components/Button.jsx';
 import Spinner from '../components/Spinner.jsx';
 import Modal from '../components/Modal.jsx';
-import { Field, Input, Select } from '../components/Field.jsx';
+import { Field, Input, Select, Textarea } from '../components/Field.jsx';
 import { apiFetchJson } from '../lib/api.js';
 import { navigate } from '../lib/router.js';
 import { formatDate, formatDateTime, formatMoney, toIsoFromDatetimeLocal } from '../lib/format.js';
 import { useToast } from '../components/Toast.jsx';
+import { filterCanonicalLevels } from '../lib/levels.js';
 
 export default function PlayerDetailsPage({ userId }) {
   const toast = useToast();
@@ -24,6 +25,9 @@ export default function PlayerDetailsPage({ userId }) {
   const [banReason, setBanReason] = useState('');
   const [banUntil, setBanUntil] = useState('');
   const [banModalOpen, setBanModalOpen] = useState(false);
+  const [notifyTitle, setNotifyTitle] = useState('Уведомление');
+  const [notifyText, setNotifyText] = useState('');
+  const [notifyUrl, setNotifyUrl] = useState('');
 
   const activeBan = useMemo(
     () => (user?.bans || []).find((b) => Boolean(b.active)) || null,
@@ -33,7 +37,7 @@ export default function PlayerDetailsPage({ userId }) {
   async function loadLevels() {
     try {
       const res = await apiFetchJson('/levels', { auth: false });
-      setLevels(res?.items || []);
+      setLevels(filterCanonicalLevels(res?.items || []));
     } catch {
       // Не критично для экрана
     }
@@ -129,6 +133,35 @@ export default function PlayerDetailsPage({ userId }) {
     }
   }
 
+  async function onSendNotificationToUser() {
+    if (!notifyText.trim()) {
+      toast.push('Введите текст уведомления', 'error');
+      return;
+    }
+
+    setActionBusy('notify');
+    try {
+      await apiFetchJson('/admin/notifications/users', {
+        method: 'POST',
+        auth: true,
+        body: {
+          user_ids: [Number(userId)],
+          type: 'SYSTEM',
+          title: notifyTitle.trim() || 'Уведомление',
+          text: notifyText.trim(),
+          url: notifyUrl.trim() || null,
+        },
+      });
+      toast.push('Уведомление отправлено', 'success');
+      setNotifyText('');
+      setNotifyUrl('');
+    } catch (e) {
+      toast.push(e?.message || 'Ошибка отправки уведомления', 'error');
+    } finally {
+      setActionBusy('');
+    }
+  }
+
   const fullName = [user?.last_name, user?.first_name].filter(Boolean).join(' ') || `Игрок #${userId}`;
 
   return (
@@ -214,6 +247,41 @@ export default function PlayerDetailsPage({ userId }) {
                 ? `Активный бан: ${activeBan.reason} ${activeBan.until ? `(до ${formatDateTime(activeBan.until)})` : '(без срока)'}` 
                 : 'Активного бана нет'}
             </div>
+            <div className="section-title" style={{ marginTop: 18 }}>Персональное уведомление</div>
+            <div className="grid-2">
+              <Field label="Заголовок">
+                <Input
+                  value={notifyTitle}
+                  onChange={(e) => setNotifyTitle(e.target.value)}
+                  placeholder="Уведомление"
+                />
+              </Field>
+
+              <Field label="Ссылка (опционально)">
+                <Input
+                  value={notifyUrl}
+                  onChange={(e) => setNotifyUrl(e.target.value)}
+                  placeholder="https://..."
+                />
+              </Field>
+            </div>
+
+            <Field label="Текст уведомления">
+              <Textarea
+                rows={3}
+                value={notifyText}
+                onChange={(e) => setNotifyText(e.target.value)}
+                placeholder="Текст уведомления для игрока..."
+              />
+            </Field>
+
+            <Button onClick={onSendNotificationToUser} disabled={actionBusy === 'notify'}>
+              {actionBusy === 'notify' ? (
+                <span className="inline-flex items-center gap-8"><Spinner size={14} /> Отправляем</span>
+              ) : (
+                'Отправить уведомление игроку'
+              )}
+            </Button>
           </Card>
 
           <Card>
