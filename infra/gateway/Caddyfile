@@ -1,0 +1,32 @@
+(app_routes) {
+    encode gzip zstd
+
+    @api path /api/*
+    handle @api {
+        reverse_proxy backend:8000
+    }
+
+    @docs path /docs /docs/* /redoc /redoc/* /openapi.json /media/* /health
+    handle @docs {
+        reverse_proxy backend:8000
+    }
+
+    @admin_root path /admin
+    redir @admin_root /admin/ 308
+
+    handle_path /admin/* {
+        reverse_proxy admin:80
+    }
+
+    handle {
+        reverse_proxy miniapp:80
+    }
+}
+
+http:// {
+    import app_routes
+}
+
+https://{$DOMAIN:previewsite-nikolaev.online} {
+    import app_routes
+}
