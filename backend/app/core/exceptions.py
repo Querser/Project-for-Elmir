@@ -169,13 +169,31 @@ def setup_exception_handlers(app) -> None:
         status = int(getattr(exc, "status_code", 500) or 500)
         detail = getattr(exc, "detail", None)
 
-        # detail может быть str/dict/Any — приведём аккуратно
+        # detail может быть str/dict/Any — приведем аккуратно.
         if isinstance(detail, str):
             message = detail
             details = None
+        elif isinstance(detail, dict):
+            # If payload already follows {"error": {...}}, keep useful fields instead of generic "HTTP error".
+            inner_error = detail.get("error")
+            if isinstance(inner_error, dict):
+                message = str(inner_error.get("message") or "HTTP error")
+                details = _json_safe(inner_error.get("details"))
+                return JSONResponse(
+                    status_code=status,
+                    content={
+                        "error": {
+                            "code": _code_to_str(inner_error.get("code") or _http_status_to_error_code(status)),
+                            "message": message,
+                            **({"details": details} if details is not None else {}),
+                        }
+                    },
+                )
+            message = str(detail.get("message") or "HTTP error")
+            details = _json_safe(detail.get("details", detail))
         else:
             message = "HTTP error"
-            details = detail
+            details = _json_safe(detail)
 
         return JSONResponse(
             status_code=status,

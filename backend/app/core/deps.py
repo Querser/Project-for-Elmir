@@ -221,11 +221,9 @@ def _get_dev_default_telegram_id() -> Optional[int]:
 
 
 def _dev_mode_enabled() -> bool:
-    if _allow_insecure_header_auth():
-        return True
-    if _get_dev_default_telegram_id() is not None:
-        return True
-    return False
+    # DEV mode is enabled only by explicit insecure-header settings or dev environment.
+    # Presence of DEV_DEFAULT_TELEGRAM_ID alone must not switch production auth logic.
+    return _allow_insecure_header_auth()
 
 
 def _get_header(request: Request, name: str) -> Optional[str]:

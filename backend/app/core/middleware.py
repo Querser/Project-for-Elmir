@@ -37,8 +37,6 @@ def _dev_mode_enabled() -> bool:
         return True
     if _env_truthy("DEV_AUTO_CREATE_USER_FROM_HEADER", False):
         return True
-    if (os.getenv("DEV_DEFAULT_TELEGRAM_ID") or "").strip():
-        return True
     if _is_dev_env():
         return True
     return False
