@@ -133,8 +133,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(TelegramAuthMiddleware)
+app.add_middleware(RequestLoggingMiddleware)
 
 setup_exception_handlers(app)
 
