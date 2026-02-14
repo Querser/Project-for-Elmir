@@ -125,6 +125,12 @@ class TelegramAuthMiddleware(BaseHTTPMiddleware):
             if telegram_id and _allow_telegram_id_header_auth():
                 return await call_next(request)
 
+            log.info(
+                "telegram auth rejected path=%s has_init_data=%s has_telegram_id=%s",
+                path,
+                bool(init_data),
+                bool(telegram_id),
+            )
             return _unauthorized("X-Telegram-Init-Data или X-Telegram-Id")
 
         return await call_next(request)
