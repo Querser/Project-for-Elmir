@@ -6,7 +6,7 @@
 // - НЕ показывает HTML 502/503 от nginx пользователю
 // - Делает retry для GET/HEAD при временных ошибках (502/503/504) и сетевых проблемах
 
-import { buildAuthHeaders, waitForTelegramInitData } from './auth';
+import { buildAuthHeaders, waitForTelegramIdentity } from './auth';
 
 // По умолчанию работаем от того же origin, что и миниапп (nginx проксирует /api/ -> backend)
 // Можно переопределить через VITE_API_BASE (например, при локальной разработке без nginx).
@@ -116,17 +116,23 @@ async function request(path, options = {}) {
   const method = (options.method || 'GET').toUpperCase();
   const headers = new Headers(options.headers || {});
 
+  const AUTH_HEADER_KEYS = ['X-Telegram-Init-Data', 'X-Telegram-Id', 'X-User-Id', 'Authorization'];
+  const applyAuthHeaders = (auth) => {
+    AUTH_HEADER_KEYS.forEach((k) => headers.delete(k));
+    Object.entries(auth || {}).forEach(([k, v]) => {
+      if (v == null || v === '') return;
+      headers.set(k, String(v));
+    });
+  };
+
   // auth headers (Telegram initData or dev headers)
   let auth = buildAuthHeaders();
   const inTelegramWebView = typeof window !== 'undefined' && Boolean(window.Telegram?.WebApp);
-  if (!auth['X-Telegram-Init-Data'] && inTelegramWebView) {
-    await waitForTelegramInitData(1200, 50);
+  if (!auth['X-Telegram-Init-Data'] && !auth['X-Telegram-Id'] && inTelegramWebView) {
+    await waitForTelegramIdentity(5000, 100);
     auth = buildAuthHeaders();
   }
-  Object.entries(auth || {}).forEach(([k, v]) => {
-    if (v == null || v === '') return;
-    if (!headers.has(k)) headers.set(k, String(v));
-  });
+  applyAuthHeaders(auth);
 
   let body = options.body;
   const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
@@ -139,7 +145,8 @@ async function request(path, options = {}) {
   }
 
   // Retry только для безопасных запросов
-  const maxAttempts = (method === 'GET' || method === 'HEAD') ? 5 : 1;
+  const baseMaxAttempts = (method === 'GET' || method === 'HEAD') ? 5 : 1;
+  const maxAttempts = inTelegramWebView ? Math.max(baseMaxAttempts, 2) : baseMaxAttempts;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
@@ -157,6 +164,13 @@ async function request(path, options = {}) {
       const json = maybeJson ? (tryJsonParse(raw) ?? null) : null;
 
       if (!res.ok) {
+        if (res.status === 401 && inTelegramWebView && attempt < maxAttempts) {
+          await waitForTelegramIdentity(5000, 100);
+          auth = buildAuthHeaders();
+          applyAuthHeaders(auth);
+          continue;
+        }
+
         const msg = makeFriendlyErrorMessage({ status: res.status, contentType: ct, json, raw });
 
         const err = new Error(msg || `HTTP ${res.status}`);

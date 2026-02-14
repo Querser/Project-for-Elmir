@@ -81,12 +81,13 @@ export function getTelegramInitData() {
   return { initData, initDataUnsafe };
 }
 
-export async function waitForTelegramInitData(timeoutMs = 1200, stepMs = 50) {
+export async function waitForTelegramIdentity(timeoutMs = 5000, stepMs = 100) {
   const timeout = Number(timeoutMs) > 0 ? Number(timeoutMs) : 0;
-  const step = Number(stepMs) > 0 ? Number(stepMs) : 50;
+  const step = Number(stepMs) > 0 ? Number(stepMs) : 100;
 
   let { initData } = getTelegramInitData();
-  if (initData) return initData;
+  let telegramId = getTelegramUserId();
+  if (initData || telegramId) return { initData, telegramId };
 
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
@@ -98,10 +99,18 @@ export async function waitForTelegramInitData(timeoutMs = 1200, stepMs = 50) {
     }
     await sleep(step);
     ({ initData } = getTelegramInitData());
-    if (initData) return initData;
+    telegramId = getTelegramUserId();
+    if (initData || telegramId) return { initData, telegramId };
   }
 
-  return getTelegramInitData().initData;
+  ({ initData } = getTelegramInitData());
+  telegramId = getTelegramUserId();
+  return { initData, telegramId };
+}
+
+export async function waitForTelegramInitData(timeoutMs = 5000, stepMs = 100) {
+  const identity = await waitForTelegramIdentity(timeoutMs, stepMs);
+  return identity.initData;
 }
 
 function lsSet(key, value) {

@@ -48,12 +48,6 @@ def _allow_telegram_id_header_auth() -> bool:
     return True
 
 
-def _looks_like_telegram_request(request: Request) -> bool:
-    user_agent = (request.headers.get("User-Agent") or "").strip().lower()
-    x_requested_with = (request.headers.get("X-Requested-With") or "").strip().lower()
-    return "telegram" in user_agent or "telegram" in x_requested_with
-
-
 def _unauthorized(required_header: str = "X-Telegram-Init-Data") -> JSONResponse:
     return JSONResponse(
         {
@@ -128,7 +122,7 @@ class TelegramAuthMiddleware(BaseHTTPMiddleware):
                 return await call_next(request)
 
             telegram_id = (request.headers.get("X-Telegram-Id") or "").strip()
-            if telegram_id and _allow_telegram_id_header_auth() and _looks_like_telegram_request(request):
+            if telegram_id and _allow_telegram_id_header_auth():
                 return await call_next(request)
 
             return _unauthorized("X-Telegram-Init-Data или X-Telegram-Id")
