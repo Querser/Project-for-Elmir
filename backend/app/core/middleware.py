@@ -42,6 +42,18 @@ def _dev_mode_enabled() -> bool:
     return False
 
 
+def _allow_telegram_id_header_auth() -> bool:
+    if "ALLOW_TELEGRAM_ID_HEADER_AUTH" in os.environ:
+        return _env_truthy("ALLOW_TELEGRAM_ID_HEADER_AUTH", default=False)
+    return True
+
+
+def _looks_like_telegram_request(request: Request) -> bool:
+    user_agent = (request.headers.get("User-Agent") or "").strip().lower()
+    x_requested_with = (request.headers.get("X-Requested-With") or "").strip().lower()
+    return "telegram" in user_agent or "telegram" in x_requested_with
+
+
 def _unauthorized(required_header: str = "X-Telegram-Init-Data") -> JSONResponse:
     return JSONResponse(
         {
@@ -112,8 +124,14 @@ class TelegramAuthMiddleware(BaseHTTPMiddleware):
         # PROD: для остальных API требуем initData
         if path.startswith("/api/v1"):
             init_data = request.headers.get("X-Telegram-Init-Data")
-            if not init_data:
-                return _unauthorized("X-Telegram-Init-Data")
+            if init_data:
+                return await call_next(request)
+
+            telegram_id = (request.headers.get("X-Telegram-Id") or "").strip()
+            if telegram_id and _allow_telegram_id_header_auth() and _looks_like_telegram_request(request):
+                return await call_next(request)
+
+            return _unauthorized("X-Telegram-Init-Data или X-Telegram-Id")
 
         return await call_next(request)
 

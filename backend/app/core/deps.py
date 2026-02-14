@@ -234,6 +234,22 @@ def _get_header(request: Request, name: str) -> Optional[str]:
     return v or None
 
 
+def _allow_telegram_id_header_auth() -> bool:
+    if "ALLOW_TELEGRAM_ID_HEADER_AUTH" in os.environ:
+        return _env_truthy("ALLOW_TELEGRAM_ID_HEADER_AUTH", default=False)
+    return True
+
+
+def _looks_like_telegram_request(request: Request) -> bool:
+    user_agent = (_get_header(request, "User-Agent") or "").lower()
+    x_requested_with = (_get_header(request, "X-Requested-With") or "").lower()
+    return "telegram" in user_agent or "telegram" in x_requested_with
+
+
+def _can_use_telegram_id_header_auth(request: Request) -> bool:
+    return _allow_telegram_id_header_auth() and _looks_like_telegram_request(request)
+
+
 def _parse_user_id(value: str) -> Union[int, UUID]:
     value = value.strip()
     if value.isdigit():
@@ -325,7 +341,13 @@ def require_telegram_init_data_or_dev_header(request: Request) -> None:
         if _get_header(request, "X-Telegram-Id") or _get_header(request, "X-User-Id"):
             return
 
-    raise unauthorized("Пользователь не авторизован через Telegram", required_header="X-Telegram-Init-Data")
+    if _get_header(request, "X-Telegram-Id") and _can_use_telegram_id_header_auth(request):
+        return
+
+    raise unauthorized(
+        "Пользователь не авторизован через Telegram",
+        required_header="X-Telegram-Init-Data или X-Telegram-Id",
+    )
 
 
 # -----------------------------
@@ -345,6 +367,8 @@ def get_current_user(
             tg_user = _parse_tg_user_from_init_data(pairs)
             return _get_or_create_user_by_telegram(db, tg_user)
 
+        tg_id_raw = _get_header(request, "X-Telegram-Id")
+
         # ---- DEV ветка ----
         if _dev_mode_enabled():
             user_id_raw = _get_header(request, "X-User-Id")
@@ -359,7 +383,6 @@ def get_current_user(
                     raise unauthorized("Unauthorized: user not found for X-User-Id header", required_header="X-User-Id")
                 return user
 
-            tg_id_raw = _get_header(request, "X-Telegram-Id")
             if tg_id_raw:
                 try:
                     tg_id = _parse_int(tg_id_raw)
@@ -373,8 +396,23 @@ def get_current_user(
 
             raise unauthorized("Unauthorized: provide X-User-Id, X-Telegram-Id or X-Telegram-Init-Data header")
 
+        # ---- PROD fallback: Telegram request with X-Telegram-Id ----
+        if tg_id_raw and _can_use_telegram_id_header_auth(request):
+            try:
+                tg_id = _parse_int(tg_id_raw)
+            except Exception:
+                raise unauthorized("Unauthorized: invalid X-Telegram-Id header", required_header="X-Telegram-Id")
+
+            user = _get_user_by_telegram_id(db, tg_id)
+            if user:
+                return user
+            return _get_or_create_user_by_telegram(db, TgWebAppUser(telegram_id=tg_id))
+
         # ---- PROD ветка ----
-        raise unauthorized("Пользователь не авторизован через Telegram", required_header="X-Telegram-Init-Data")
+        raise unauthorized(
+            "Пользователь не авторизован через Telegram",
+            required_header="X-Telegram-Init-Data или X-Telegram-Id",
+        )
 
     except HTTPException:
         raise
