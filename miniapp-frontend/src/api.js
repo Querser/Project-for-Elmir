@@ -6,7 +6,7 @@
 // - НЕ показывает HTML 502/503 от nginx пользователю
 // - Делает retry для GET/HEAD при временных ошибках (502/503/504) и сетевых проблемах
 
-import { buildAuthHeaders } from './auth';
+import { buildAuthHeaders, waitForTelegramInitData } from './auth';
 
 // По умолчанию работаем от того же origin, что и миниапп (nginx проксирует /api/ -> backend)
 // Можно переопределить через VITE_API_BASE (например, при локальной разработке без nginx).
@@ -117,7 +117,12 @@ async function request(path, options = {}) {
   const headers = new Headers(options.headers || {});
 
   // auth headers (Telegram initData or dev headers)
-  const auth = buildAuthHeaders();
+  let auth = buildAuthHeaders();
+  const inTelegramWebView = typeof window !== 'undefined' && Boolean(window.Telegram?.WebApp);
+  if (!auth['X-Telegram-Init-Data'] && inTelegramWebView) {
+    await waitForTelegramInitData(1200, 50);
+    auth = buildAuthHeaders();
+  }
   Object.entries(auth || {}).forEach(([k, v]) => {
     if (v == null || v === '') return;
     if (!headers.has(k)) headers.set(k, String(v));

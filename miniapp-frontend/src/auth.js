@@ -8,14 +8,65 @@ export function getTelegramWebApp() {
   return window.Telegram?.WebApp ?? null;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function readParam(raw, name) {
+  const source = String(raw || "").trim();
+  if (!source) return "";
+
+  const withoutPrefix = source.startsWith("?") || source.startsWith("#")
+    ? source.slice(1)
+    : source;
+
+  const queryPart = withoutPrefix.includes("?")
+    ? withoutPrefix.slice(withoutPrefix.indexOf("?") + 1)
+    : withoutPrefix;
+
+  try {
+    const params = new URLSearchParams(queryPart);
+    return params.get(name) || "";
+  } catch {
+    return "";
+  }
+}
+
+function getInitDataFromLocation() {
+  if (typeof window === "undefined") return "";
+  const fromSearch = readParam(window.location?.search, "tgWebAppData");
+  if (fromSearch) return fromSearch;
+  return readParam(window.location?.hash, "tgWebAppData");
+}
+
+function parseUserFromInitData(initData) {
+  const raw = String(initData || "").trim();
+  if (!raw) return null;
+  try {
+    const params = new URLSearchParams(raw);
+    const userRaw = params.get("user");
+    if (!userRaw) return null;
+    const parsed = JSON.parse(userRaw);
+    if (!parsed || parsed.id == null) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
 export function isInTelegram() {
   const tg = getTelegramWebApp();
-  return Boolean(tg && (tg.initData || tg.initDataUnsafe));
+  return Boolean(
+    (tg && (tg.initData || tg.initDataUnsafe)) ||
+      getInitDataFromLocation(),
+  );
 }
 
 export function getTelegramUser() {
   const tg = getTelegramWebApp();
-  return tg?.initDataUnsafe?.user ?? null;
+  const fromSdk = tg?.initDataUnsafe?.user ?? null;
+  if (fromSdk && fromSdk.id != null) return fromSdk;
+  return parseUserFromInitData(getTelegramInitData().initData);
 }
 
 export function getTelegramUserId() {
@@ -25,9 +76,32 @@ export function getTelegramUserId() {
 
 export function getTelegramInitData() {
   const tg = getTelegramWebApp();
-  const initData = tg?.initData || "";
+  const initData = String(tg?.initData || getInitDataFromLocation() || "");
   const initDataUnsafe = tg?.initDataUnsafe || null;
   return { initData, initDataUnsafe };
+}
+
+export async function waitForTelegramInitData(timeoutMs = 1200, stepMs = 50) {
+  const timeout = Number(timeoutMs) > 0 ? Number(timeoutMs) : 0;
+  const step = Number(stepMs) > 0 ? Number(stepMs) : 50;
+
+  let { initData } = getTelegramInitData();
+  if (initData) return initData;
+
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const tg = getTelegramWebApp();
+    try {
+      tg?.ready?.();
+    } catch {
+      // ignore
+    }
+    await sleep(step);
+    ({ initData } = getTelegramInitData());
+    if (initData) return initData;
+  }
+
+  return getTelegramInitData().initData;
 }
 
 function lsSet(key, value) {
@@ -100,7 +174,8 @@ export function buildAuthHeaders() {
   const headers = {};
 
   const { initData, initDataUnsafe } = getTelegramInitData();
-  const tgId = initDataUnsafe?.user?.id;
+  const parsedUser = parseUserFromInitData(initData);
+  const tgId = initDataUnsafe?.user?.id ?? parsedUser?.id ?? null;
 
   if (initData) {
     headers["X-Telegram-Init-Data"] = initData;
@@ -141,10 +216,11 @@ export async function initTelegramAuth() {
   }
 
   const { initData, initDataUnsafe } = getTelegramInitData();
+  const parsedUser = parseUserFromInitData(initData);
   return {
     telegramId: getTelegramId(),
     initData,
     initDataUnsafe,
-    user: initDataUnsafe?.user ?? null,
+    user: initDataUnsafe?.user ?? parsedUser ?? null,
   };
 }
