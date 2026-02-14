@@ -3,15 +3,19 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Optional, Sequence
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.core.exceptions import AppException, ErrorCode
 from app.policies import CANCEL_MIN_DELTA
 
 from app.models.training import Training
 from app.models.enrollment import Enrollment, EnrollmentStatus
+from app.models.level import Level
 from app.models.user import User
+from app.schemas.training import CANONICAL_LEVEL_NAMES
 from app.services.ban_service import get_active_ban
+
+_LEVEL_ORDER = {name: idx for idx, name in enumerate(CANONICAL_LEVEL_NAMES)}
 
 
 def _now_aware() -> datetime:
@@ -150,13 +154,58 @@ def _estimate_amount(training: Training, enrollment: Optional[Enrollment] = None
     return 0.0
 
 
-def _get_enrollment_block_reason(db: Session, user_id: int) -> str | None:
+# ---------------------------------------------------------------------
+# PUBLIC API (то, что обычно импортируют роутеры)
+# ---------------------------------------------------------------------
+
+def _canonical_level_name(value: Any) -> str | None:
+    raw = str(value or "").strip().replace("−", "-")
+    if not raw:
+        return None
+    if raw in _LEVEL_ORDER:
+        return raw
+
+    lowered = raw.lower()
+    if "нович" in lowered:
+        return "Новичок"
+    if "средний-" in lowered:
+        return "Средний-"
+    if lowered == "средний":
+        return "Средний"
+    if "средний+" in lowered:
+        return "Средний+"
+    if "лайтпро" in lowered or "lightpro" in lowered:
+        return "Средний+"
+    if "лайт+" in lowered or "light+" in lowered:
+        return "Средний"
+    if "лайт" in lowered or "light" in lowered:
+        return "Средний-"
+    if "медиум" in lowered or "medium" in lowered:
+        return "Средний+"
+    return None
+
+
+def _resolve_user_level_name(db: Session, user: User) -> str | None:
+    direct_level = _canonical_level_name(getattr(getattr(user, "level", None), "name", None))
+    if direct_level:
+        return direct_level
+
+    level_id = getattr(user, "level_id", None)
+    if level_id is None:
+        return None
+
+    level_row = db.query(Level).filter(Level.id == int(level_id)).first()
+    return _canonical_level_name(getattr(level_row, "name", None))
+
+
+def _get_enrollment_block_reason(db: Session, user_id: int, *, user: User | None = None) -> str | None:
     active_ban = get_active_ban(db, user_id=user_id)
     if active_ban is not None:
         ban_reason = (getattr(active_ban, "reason", None) or "").strip()
         return ban_reason or "Пользователь находится в бане"
 
-    user = db.query(User).filter(User.id == user_id).first()
+    if user is None:
+        user = db.query(User).filter(User.id == user_id).first()
     if user is None:
         raise AppException.not_found(ErrorCode.USER_NOT_FOUND, f"User {user_id} not found")
 
@@ -166,9 +215,48 @@ def _get_enrollment_block_reason(db: Session, user_id: int) -> str | None:
     return None
 
 
-# ---------------------------------------------------------------------
-# PUBLIC API (то, что обычно импортируют роутеры)
-# ---------------------------------------------------------------------
+def _get_level_block_reason(db: Session, *, user: User, training: Training) -> str | None:
+    min_level_name = _canonical_level_name(getattr(training, "min_level_name", None))
+    max_level_name = _canonical_level_name(getattr(training, "max_level_name", None))
+
+    if min_level_name is None and max_level_name is None:
+        return None
+
+    required_min = min_level_name or CANONICAL_LEVEL_NAMES[0]
+    required_max = max_level_name or CANONICAL_LEVEL_NAMES[-1]
+
+    min_idx = _LEVEL_ORDER.get(required_min)
+    max_idx = _LEVEL_ORDER.get(required_max)
+    if min_idx is None or max_idx is None:
+        return None
+
+    if min_idx > max_idx:
+        min_idx, max_idx = max_idx, min_idx
+        required_min, required_max = required_max, required_min
+
+    user_level_name = _resolve_user_level_name(db, user)
+    if user_level_name is None:
+        return (
+            "Вы не можете записаться, потому что у вас не указан уровень игрока. "
+            "Обратитесь к администратору."
+        )
+
+    user_level_idx = _LEVEL_ORDER.get(user_level_name)
+    if user_level_idx is None:
+        return (
+            "Вы не можете записаться, потому что ваш уровень не распознан. "
+            "Обратитесь к администратору."
+        )
+
+    if user_level_idx < min_idx or user_level_idx > max_idx:
+        required_range = required_min if required_min == required_max else f"{required_min} — {required_max}"
+        return (
+            f'Вы не можете записаться, потому что ваш уровень "{user_level_name}" '
+            f'не соответствует требуемому "{required_range}".'
+        )
+
+    return None
+
 
 def get_enrollment_by_id(db: Session, *, enrollment_id: int) -> Enrollment:
     e = db.query(Enrollment).filter(Enrollment.id == enrollment_id).first()
@@ -239,11 +327,34 @@ def enroll_user_to_training(
 ) -> Enrollment:
     training = _get_training(db, training_id)
 
-    blocked_reason = _get_enrollment_block_reason(db, user_id=user_id)
+    user = (
+        db.query(User)
+        .options(selectinload(User.level))
+        .filter(User.id == user_id)
+        .first()
+    )
+    if user is None:
+        raise AppException.not_found(ErrorCode.USER_NOT_FOUND, f"User {user_id} not found")
+
+    blocked_reason = _get_enrollment_block_reason(db, user_id=user_id, user=user)
     if blocked_reason:
         raise AppException.forbidden(
             message=blocked_reason,
             details={"user_id": user_id, "reason": blocked_reason},
+        )
+
+    level_block_reason = _get_level_block_reason(db, user=user, training=training)
+    if level_block_reason:
+        raise AppException.forbidden(
+            message=level_block_reason,
+            details={
+                "user_id": user_id,
+                "training_id": training_id,
+                "reason": level_block_reason,
+                "user_level_name": _resolve_user_level_name(db, user),
+                "min_level_name": getattr(training, "min_level_name", None),
+                "max_level_name": getattr(training, "max_level_name", None),
+            },
         )
 
     existing = (

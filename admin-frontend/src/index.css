@@ -518,6 +518,75 @@ input[type="datetime-local"].input {
   margin-top: 10px;
 }
 
+.rich-editor-wrap {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-soft);
+  overflow: hidden;
+}
+
+.rich-editor-toolbar {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(47, 125, 246, 0.06);
+}
+
+.rich-editor-btn {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-main);
+  border-radius: 8px;
+  min-height: 30px;
+  padding: 4px 8px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.rich-editor-btn:hover {
+  border-color: rgba(47, 125, 246, 0.55);
+}
+
+.rich-editor {
+  min-height: 140px;
+  padding: 10px 12px;
+  line-height: 1.45;
+  outline: none;
+  overflow-wrap: anywhere;
+}
+
+.rich-editor:empty::before {
+  content: attr(data-placeholder);
+  color: var(--text-muted);
+}
+
+.admin-notification-text {
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.admin-notification-text p {
+  margin: 0 0 6px;
+}
+
+.admin-notification-text p:last-child {
+  margin-bottom: 0;
+}
+
+.admin-notification-text ul,
+.admin-notification-text ol {
+  margin: 6px 0 6px 18px;
+  padding: 0;
+}
+
+.admin-notification-text a {
+  color: var(--primary);
+  text-decoration: underline;
+}
+
 .recipient-list {
   margin-top: 8px;
   display: grid;

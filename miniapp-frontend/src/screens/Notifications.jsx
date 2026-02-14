@@ -26,6 +26,118 @@ function normalizeText(value) {
   return String(value).trim();
 }
 
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function hasHtmlMarkup(value) {
+  return /<\/?[a-z][\s\S]*>/i.test(String(value || ''));
+}
+
+function sanitizeInlineStyle(styleValue) {
+  const raw = String(styleValue || '');
+  const safe = raw
+    .replace(/expression\s*\([^)]*\)/gi, '')
+    .replace(/behavior\s*:[^;]+;?/gi, '')
+    .replace(/url\s*\(\s*['"]?\s*javascript:[^)]+\)/gi, '');
+  return safe.trim();
+}
+
+function sanitizeHtml(html) {
+  if (typeof window === 'undefined' || typeof DOMParser === 'undefined') {
+    return escapeHtml(html);
+  }
+
+  const allowedTags = new Set([
+    'a', 'b', 'strong', 'i', 'em', 'u', 's',
+    'span', 'div', 'p', 'br',
+    'ul', 'ol', 'li',
+    'blockquote', 'code', 'pre',
+    'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+    'font',
+  ]);
+  const allowedAttrs = new Set(['style', 'href', 'target', 'rel', 'title']);
+
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(`<div>${html}</div>`, 'text/html');
+  const root = doc.body.firstElementChild;
+  if (!root) return '';
+
+  const walk = (node) => {
+    const children = Array.from(node.children || []);
+    children.forEach(walk);
+
+    const tag = node.tagName?.toLowerCase?.() || '';
+    if (!allowedTags.has(tag)) {
+      const parent = node.parentNode;
+      if (!parent) return;
+      while (node.firstChild) {
+        parent.insertBefore(node.firstChild, node);
+      }
+      parent.removeChild(node);
+      return;
+    }
+
+    Array.from(node.attributes || []).forEach((attr) => {
+      const name = attr.name.toLowerCase();
+      const value = String(attr.value || '');
+
+      if (name.startsWith('on')) {
+        node.removeAttribute(attr.name);
+        return;
+      }
+
+      if (!allowedAttrs.has(name)) {
+        node.removeAttribute(attr.name);
+        return;
+      }
+
+      if (name === 'style') {
+        const safeStyle = sanitizeInlineStyle(value);
+        if (safeStyle) node.setAttribute('style', safeStyle);
+        else node.removeAttribute('style');
+        return;
+      }
+
+      if (name === 'href') {
+        if (!/^(https?:|mailto:|tg:)/i.test(value)) {
+          node.removeAttribute('href');
+        }
+        return;
+      }
+
+      if (name === 'target') {
+        node.setAttribute('target', '_blank');
+        return;
+      }
+
+      if (name === 'rel') {
+        node.setAttribute('rel', 'noopener noreferrer');
+      }
+    });
+
+    if (tag === 'a' && node.getAttribute('href')) {
+      node.setAttribute('target', '_blank');
+      node.setAttribute('rel', 'noopener noreferrer');
+    }
+  };
+
+  walk(root);
+  return root.innerHTML;
+}
+
+function notificationBodyHtml(value) {
+  const raw = String(value ?? '');
+  if (!raw.trim()) return '';
+  if (hasHtmlMarkup(raw)) return sanitizeHtml(raw);
+  return escapeHtml(raw).replace(/\r?\n/g, '<br/>');
+}
+
 function unique(list) {
   return Array.from(new Set(list.filter(Boolean)));
 }
@@ -173,6 +285,7 @@ export default function Notifications() {
                 const created = parseDate(n?.created_at ?? n?.createdAt);
                 const isRead = Boolean(n?.is_read ?? n?.isRead);
                 const isExpanded = id != null && expandedIds.includes(id);
+                const bodyHtml = notificationBodyHtml(text || formatWhen(created));
 
                 return (
                   <button
@@ -189,9 +302,10 @@ export default function Notifications() {
                       <span className="notification-date">{formatWhen(created)}</span>
                     </div>
 
-                    <div className={`notification-text ${isExpanded ? 'expanded' : 'collapsed'}`}>
-                      {text || formatWhen(created)}
-                    </div>
+                    <div
+                      className={`notification-text ${isExpanded ? 'expanded' : 'collapsed'}`}
+                      dangerouslySetInnerHTML={{ __html: bodyHtml }}
+                    />
 
                     {isExpanded && url ? (
                       <div className="notification-link-wrap">

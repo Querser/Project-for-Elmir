@@ -65,6 +65,7 @@ def _participant_payload(enrollment: Any, *, is_reserve: bool) -> dict[str, Any]
     first_name = _safe_text(getattr(user_obj, "first_name", None))
     last_name = _safe_text(getattr(user_obj, "last_name", None))
     username = _safe_text(getattr(user_obj, "username", None))
+    avatar_url = _safe_text(getattr(user_obj, "avatar_url", None))
 
     full_name = " ".join(x for x in (first_name, last_name) if x).strip()
     if not full_name and username:
@@ -80,6 +81,7 @@ def _participant_payload(enrollment: Any, *, is_reserve: bool) -> dict[str, Any]
         "first_name": first_name or None,
         "last_name": last_name or None,
         "username": username or None,
+        "avatar_url": avatar_url or None,
         "full_name": full_name or None,
         "level_name": level_name or None,
         "is_reserve": bool(is_reserve),

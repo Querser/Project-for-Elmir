@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.models.ban import Ban
 from app.models.debt import Debt, DebtStatus
-from app.models.enrollment import Enrollment
+from app.models.enrollment import Enrollment, EnrollmentStatus
 from app.models.level import Level
 from app.models.training import Training
 from app.models.user import User
@@ -60,6 +60,7 @@ def list_admin_users(
             like = f"%{q_norm}%"
             query = query.filter(
                 or_(
+                    cast(User.id, String).ilike(like),
                     User.first_name.ilike(like),
                     User.last_name.ilike(like),
                     User.username.ilike(like),
@@ -245,3 +246,62 @@ def mark_debt_paid_offline(db: Session, *, user_id: int, debt_id: int):
         db.refresh(enr)
 
     return debt
+
+
+def _status_value(status: object) -> str:
+    value = getattr(status, "value", status)
+    try:
+        return str(value).lower().strip()
+    except Exception:
+        return ""
+
+
+def _is_active_or_reserve_status(status: object) -> bool:
+    st = _status_value(status)
+    return st in {"active", "enrolled", "confirmed", "reserve", "waitlist", "standby"}
+
+
+def cancel_user_active_enrollments(
+    db: Session,
+    *,
+    user_id: int,
+    require_active_ban: bool = True,
+) -> tuple[int, bool] | None:
+    user_exists = db.query(User.id).filter(User.id == user_id).first() is not None
+    if not user_exists:
+        return None
+
+    now = _now_utc()
+    has_active_ban = (
+        db.query(Ban.id)
+        .filter(Ban.user_id == user_id)
+        .filter(_active_ban_filter(now))
+        .first()
+        is not None
+    )
+    if require_active_ban and not has_active_ban:
+        return 0, False
+
+    cancelled_status = (
+        getattr(EnrollmentStatus, "CANCELLED", None)
+        or getattr(EnrollmentStatus, "CANCELED", None)
+        or "cancelled"
+    )
+
+    enrollments = db.query(Enrollment).filter(Enrollment.user_id == user_id).all()
+    cancelled_count = 0
+    for enr in enrollments:
+        if not _is_active_or_reserve_status(getattr(enr, "status", None)):
+            continue
+        enr.status = cancelled_status
+        if hasattr(enr, "is_reserve"):
+            enr.is_reserve = False
+        if hasattr(enr, "cancelled_at"):
+            enr.cancelled_at = now
+        db.add(enr)
+        cancelled_count += 1
+
+    if cancelled_count:
+        db.commit()
+
+    return cancelled_count, has_active_ban

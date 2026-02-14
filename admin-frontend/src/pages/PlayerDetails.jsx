@@ -39,7 +39,7 @@ export default function PlayerDetailsPage({ userId }) {
 
   async function loadLevels() {
     try {
-      const res = await apiFetchJson('/levels', { auth: false });
+      const res = await apiFetchJson('/levels', { auth: true });
       setLevels(filterCanonicalLevels(res?.items || []));
     } catch {
       // Не критично для экрана
@@ -87,6 +87,27 @@ export default function PlayerDetailsPage({ userId }) {
       await loadUser();
     } catch (e) {
       toast.push(e?.message || 'Ошибка снятия бана', 'error');
+    } finally {
+      setActionBusy('');
+    }
+  }
+
+  async function onCancelBannedEnrollments() {
+    setActionBusy('cancel_enrollments');
+    try {
+      const res = await apiFetchJson(`/admin/users/${userId}/cancel-enrollments`, {
+        method: 'POST',
+        auth: true,
+      });
+      const cancelled = Number(res?.cancelled || 0);
+      if (cancelled > 0) {
+        toast.push(`Отменено записей: ${cancelled}`, 'success');
+      } else {
+        toast.push('Активных записей для отмены не найдено', 'success');
+      }
+      await loadUser();
+    } catch (e) {
+      toast.push(e?.message || 'Ошибка отмены записей пользователя', 'error');
     } finally {
       setActionBusy('');
     }
@@ -273,6 +294,17 @@ export default function PlayerDetailsPage({ userId }) {
               <Button variant="secondary" onClick={onUnban} disabled={actionBusy === 'unban'}>
                 {actionBusy === 'unban' ? 'Снимаем...' : 'Снять бан'}
               </Button>
+              {user.has_active_ban ? (
+                <Button
+                  variant="secondary"
+                  onClick={onCancelBannedEnrollments}
+                  disabled={actionBusy === 'cancel_enrollments'}
+                >
+                  {actionBusy === 'cancel_enrollments'
+                    ? 'Отменяем записи...'
+                    : 'Отменить все записи на тренировки'}
+                </Button>
+              ) : null}
             </div>
 
             <div className="muted" style={{ marginTop: 10 }}>

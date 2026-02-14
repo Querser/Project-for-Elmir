@@ -122,12 +122,6 @@ export default function Profile({ onBack }) {
         ),
       });
 
-      const need =
-        !normalizeStr(p?.phone) ||
-        !normalizeStr(p?.birth_date ?? p?.birthDate) ||
-        !normalizeStr(p?.gender ?? p?.sex);
-
-      if (need) setEditOpen(true);
     } catch (err) {
       setErrorText(err?.message || 'Ошибка загрузки профиля');
     } finally {

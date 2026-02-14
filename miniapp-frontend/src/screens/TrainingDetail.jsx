@@ -157,6 +157,52 @@ function participantMeta(item) {
   return parts.join(' • ');
 }
 
+function participantAvatarLetter(item) {
+  const name = participantDisplayName(item).replace(/^@/, '').trim();
+  return name ? name[0].toUpperCase() : '•';
+}
+
+function resolveAvatarUrl(raw) {
+  const value = maybeFixUtf8Mojibake(raw ?? '').toString().trim();
+  if (!value) return '';
+  if (/^https?:\/\//i.test(value)) return value;
+  try {
+    return new URL(value, window.location.origin).toString();
+  } catch {
+    return value;
+  }
+}
+
+function tgUsernamePretty(raw) {
+  const value = maybeFixUtf8Mojibake(raw ?? '').toString().trim();
+  if (!value) return '';
+  return value.startsWith('@') ? value : `@${value}`;
+}
+
+function openTelegramByUsername(username) {
+  const clean = maybeFixUtf8Mojibake(username ?? '').toString().trim().replace(/^@/, '');
+  if (!clean) return;
+  const url = `https://t.me/${clean}`;
+  try {
+    const tg = typeof window !== 'undefined' ? window.Telegram?.WebApp : null;
+    if (tg?.openTelegramLink) {
+      tg.openTelegramLink(url);
+      return;
+    }
+    if (tg?.openLink) {
+      tg.openLink(url);
+      return;
+    }
+  } catch {
+    // ignore and fallback to window.open
+  }
+  try {
+    window.open(url, '_blank', 'noopener,noreferrer');
+  } catch {
+    // ignore
+  }
+}
+
 export default function TrainingDetail({ trainingId, onBack, onChanged }) {
   const [training, setTraining] = useState(null);
   const [locationLabel, setLocationLabel] = useState('');
@@ -169,6 +215,11 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
   const [bookingOpen, setBookingOpen] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
   const [banInfoOpen, setBanInfoOpen] = useState(false);
+  const [playerModalOpen, setPlayerModalOpen] = useState(false);
+  const [playerModalUserId, setPlayerModalUserId] = useState(null);
+  const [playerModalLoading, setPlayerModalLoading] = useState(false);
+  const [playerModalError, setPlayerModalError] = useState('');
+  const [playerModalProfile, setPlayerModalProfile] = useState(null);
 
   const openExternalLink = (url) => {
     if (!url) return;
@@ -286,6 +337,68 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [trainingId]);
+
+  const openParticipantProfile = (userId) => {
+    if (!userId) return;
+    setPlayerModalUserId(Number(userId));
+    setPlayerModalOpen(true);
+    setPlayerModalLoading(true);
+    setPlayerModalError('');
+    setPlayerModalProfile(null);
+  };
+
+  const closeParticipantProfile = () => {
+    setPlayerModalOpen(false);
+    setPlayerModalUserId(null);
+    setPlayerModalLoading(false);
+    setPlayerModalError('');
+    setPlayerModalProfile(null);
+  };
+
+  useEffect(() => {
+    let alive = true;
+    async function loadParticipantProfile() {
+      if (!playerModalOpen || !playerModalUserId) return;
+      try {
+        setPlayerModalLoading(true);
+        setPlayerModalError('');
+        const res = await apiFetch(`/api/v1/profile/${playerModalUserId}`);
+        const profile = res?.item ?? res ?? null;
+        if (!alive) return;
+        setPlayerModalProfile(profile);
+      } catch (err) {
+        if (!alive) return;
+        setPlayerModalError(err?.message || 'Не удалось загрузить профиль игрока');
+      } finally {
+        if (alive) setPlayerModalLoading(false);
+      }
+    }
+    loadParticipantProfile();
+    return () => {
+      alive = false;
+    };
+  }, [playerModalOpen, playerModalUserId]);
+
+  const playerModalView = useMemo(() => {
+    if (!playerModalProfile) return null;
+    const name = participantDisplayName(playerModalProfile);
+    const avatarLetter = participantAvatarLetter(playerModalProfile);
+    const avatarUrl = resolveAvatarUrl(playerModalProfile?.avatar_url);
+    const levelName = maybeFixUtf8Mojibake(playerModalProfile?.level_name ?? '').toString().trim();
+    const rating = Number(playerModalProfile?.rating ?? 0) || 0;
+    const cups = Number(playerModalProfile?.cups ?? 0) || 0;
+    const username = maybeFixUtf8Mojibake(playerModalProfile?.username ?? '').toString().trim();
+    return {
+      name,
+      avatarLetter,
+      avatarUrl,
+      levelName: levelName || '—',
+      rating,
+      cups,
+      telegram: tgUsernamePretty(username),
+      telegramRaw: username,
+    };
+  }, [playerModalProfile]);
 
   const startAt = useMemo(
     () => parseDate(training?.starts_at ?? training?.start_at ?? training?.startsAt ?? training?.startAt),
@@ -704,8 +817,28 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
                   <ul className="participants-list">
                     {participantsMain.map((p, idx) => (
                       <li key={`m-${p?.enrollment_id ?? p?.user_id ?? idx}`} className="participants-item">
-                        <span className="participants-name">{participantDisplayName(p)}</span>
-                        {participantMeta(p) ? <span className="participants-meta">{participantMeta(p)}</span> : null}
+                        <button
+                          type="button"
+                          className={`participants-item-btn ${p?.user_id ? 'clickable' : ''}`}
+                          onClick={() => openParticipantProfile(p?.user_id)}
+                          disabled={!p?.user_id}
+                        >
+                          <span className="participants-avatar">
+                            {resolveAvatarUrl(p?.avatar_url) ? (
+                              <img
+                                src={resolveAvatarUrl(p?.avatar_url)}
+                                alt={participantDisplayName(p)}
+                                className="participants-avatar-image"
+                              />
+                            ) : (
+                              participantAvatarLetter(p)
+                            )}
+                          </span>
+                          <span className="participants-user">
+                            <span className="participants-name">{participantDisplayName(p)}</span>
+                            {participantMeta(p) ? <span className="participants-meta">{participantMeta(p)}</span> : null}
+                          </span>
+                        </button>
                       </li>
                     ))}
                   </ul>
@@ -720,8 +853,28 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
                   <ul className="participants-list">
                     {participantsReserve.map((p, idx) => (
                       <li key={`r-${p?.enrollment_id ?? p?.user_id ?? idx}`} className="participants-item">
-                        <span className="participants-name">{participantDisplayName(p)}</span>
-                        {participantMeta(p) ? <span className="participants-meta">{participantMeta(p)}</span> : null}
+                        <button
+                          type="button"
+                          className={`participants-item-btn ${p?.user_id ? 'clickable' : ''}`}
+                          onClick={() => openParticipantProfile(p?.user_id)}
+                          disabled={!p?.user_id}
+                        >
+                          <span className="participants-avatar">
+                            {resolveAvatarUrl(p?.avatar_url) ? (
+                              <img
+                                src={resolveAvatarUrl(p?.avatar_url)}
+                                alt={participantDisplayName(p)}
+                                className="participants-avatar-image"
+                              />
+                            ) : (
+                              participantAvatarLetter(p)
+                            )}
+                          </span>
+                          <span className="participants-user">
+                            <span className="participants-name">{participantDisplayName(p)}</span>
+                            {participantMeta(p) ? <span className="participants-meta">{participantMeta(p)}</span> : null}
+                          </span>
+                        </button>
                       </li>
                     ))}
                   </ul>
@@ -843,10 +996,98 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
           </div>
         </div>
       ) : null}
+
+      {playerModalOpen ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={closeParticipantProfile}>
+          <div className="modal" onClick={(ev) => ev.stopPropagation()}>
+            <div className="modal-title">Профиль игрока</div>
+
+            {playerModalLoading ? (
+              <div className="modal-text" style={{ marginTop: 10 }}>
+                Загрузка…
+              </div>
+            ) : null}
+
+            {!playerModalLoading && playerModalError ? (
+              <div className="modal-text" style={{ marginTop: 10, color: 'var(--danger)' }}>
+                {playerModalError}
+              </div>
+            ) : null}
+
+            {!playerModalLoading && !playerModalError && playerModalView ? (
+              <>
+                <div className="profile-card" style={{ marginTop: 12, cursor: 'default' }}>
+                  <div className="profile-avatar">
+                    {playerModalView.avatarUrl ? (
+                      <img
+                        src={playerModalView.avatarUrl}
+                        alt={playerModalView.name}
+                        className="profile-avatar-image"
+                      />
+                    ) : (
+                      playerModalView.avatarLetter
+                    )}
+                  </div>
+
+                  <div className="profile-main">
+                    <div className="profile-name">{playerModalView.name}</div>
+                    <div className="profile-sub" style={{ marginTop: 6 }}>
+                      Уровень: <b>{playerModalView.levelName}</b>
+                    </div>
+
+                    <div className="details-card" style={{ marginTop: 12 }}>
+                      <div className="label-row">
+                        <span className="label-muted">Рейтинг</span>
+                        <span className="label-strong">{playerModalView.rating}</span>
+                      </div>
+                      <div className="label-row" style={{ marginBottom: 0 }}>
+                        <span className="label-muted">Кубки</span>
+                        <span className="label-strong">{playerModalView.cups}</span>
+                      </div>
+                    </div>
+
+                    {playerModalView.telegram ? (
+                      <div className="details-card" style={{ marginTop: 12 }}>
+                        <div className="label-row" style={{ marginBottom: 0 }}>
+                          <span className="label-muted">Telegram</span>
+                          <span
+                            className="label-strong"
+                            style={{ color: 'var(--primary)', cursor: 'pointer' }}
+                            onClick={() => openTelegramByUsername(playerModalView.telegramRaw)}
+                          >
+                            {playerModalView.telegram}
+                          </span>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div className="modal-actions">
+                  {playerModalView.telegram ? (
+                    <button
+                      className="primary-btn"
+                      type="button"
+                      onClick={() => openTelegramByUsername(playerModalView.telegramRaw)}
+                    >
+                      Перейти в Telegram
+                    </button>
+                  ) : null}
+                  <button className="ghost-btn" type="button" onClick={closeParticipantProfile}>
+                    Закрыть
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="modal-actions">
+                <button className="ghost-btn" type="button" onClick={closeParticipantProfile}>
+                  Закрыть
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }
-
-
-
-

@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import AdminLayout from '../components/AdminLayout.jsx';
 import Card from '../components/Card.jsx';
 import Button from '../components/Button.jsx';
 import Spinner from '../components/Spinner.jsx';
-import { Field, Input, Select, Textarea } from '../components/Field.jsx';
+import { Field, Input, Select } from '../components/Field.jsx';
 import { apiFetchJson } from '../lib/api.js';
 import { formatDateTime, toIsoFromDatetimeLocal } from '../lib/format.js';
 import { useToast } from '../components/Toast.jsx';
@@ -17,6 +17,105 @@ const SEND_MODES = [
 const NOTIFICATION_TYPES = ['INFO', 'SYSTEM', 'TRAINING', 'IMPORTANT'];
 const URL_RE = /^https?:\/\/[^\s]+$/i;
 
+function extractPlainText(html) {
+  const raw = String(html || '');
+  if (!raw.trim()) return '';
+  if (typeof window === 'undefined' || typeof DOMParser === 'undefined') {
+    return raw.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+  const doc = new DOMParser().parseFromString(raw, 'text/html');
+  return (doc.body?.textContent || '').replace(/\s+/g, ' ').trim();
+}
+
+function sanitizeInlineStyle(styleValue) {
+  const raw = String(styleValue || '');
+  return raw
+    .replace(/expression\s*\([^)]*\)/gi, '')
+    .replace(/behavior\s*:[^;]+;?/gi, '')
+    .replace(/url\s*\(\s*['"]?\s*javascript:[^)]+\)/gi, '')
+    .trim();
+}
+
+function sanitizeHtml(html) {
+  const raw = String(html || '');
+  if (!raw.trim()) return '';
+
+  if (typeof window === 'undefined' || typeof DOMParser === 'undefined') {
+    return raw.replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '');
+  }
+
+  const allowedTags = new Set([
+    'a', 'b', 'strong', 'i', 'em', 'u', 's',
+    'span', 'div', 'p', 'br',
+    'ul', 'ol', 'li',
+    'blockquote', 'code', 'pre',
+    'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+    'font',
+  ]);
+  const allowedAttrs = new Set(['style', 'href', 'target', 'rel', 'title']);
+
+  const doc = new DOMParser().parseFromString(`<div>${raw}</div>`, 'text/html');
+  const root = doc.body.firstElementChild;
+  if (!root) return '';
+
+  const walk = (node) => {
+    const children = Array.from(node.children || []);
+    children.forEach(walk);
+
+    const tag = node.tagName?.toLowerCase?.() || '';
+    if (!allowedTags.has(tag)) {
+      const parent = node.parentNode;
+      if (!parent) return;
+      while (node.firstChild) {
+        parent.insertBefore(node.firstChild, node);
+      }
+      parent.removeChild(node);
+      return;
+    }
+
+    Array.from(node.attributes || []).forEach((attr) => {
+      const name = attr.name.toLowerCase();
+      const value = String(attr.value || '');
+
+      if (name.startsWith('on') || !allowedAttrs.has(name)) {
+        node.removeAttribute(attr.name);
+        return;
+      }
+
+      if (name === 'style') {
+        const safe = sanitizeInlineStyle(value);
+        if (safe) node.setAttribute('style', safe);
+        else node.removeAttribute('style');
+        return;
+      }
+
+      if (name === 'href') {
+        if (!/^(https?:|mailto:|tg:)/i.test(value)) {
+          node.removeAttribute('href');
+        }
+        return;
+      }
+
+      if (name === 'target') {
+        node.setAttribute('target', '_blank');
+        return;
+      }
+
+      if (name === 'rel') {
+        node.setAttribute('rel', 'noopener noreferrer');
+      }
+    });
+
+    if (tag === 'a' && node.getAttribute('href')) {
+      node.setAttribute('target', '_blank');
+      node.setAttribute('rel', 'noopener noreferrer');
+    }
+  };
+
+  walk(root);
+  return root.innerHTML;
+}
+
 export default function NotificationsAdminPage() {
   const toast = useToast();
 
@@ -29,6 +128,7 @@ export default function NotificationsAdminPage() {
   const [text, setText] = useState('');
   const [url, setUrl] = useState('');
   const [trainingId, setTrainingId] = useState('');
+  const editorRef = useRef(null);
 
   const [recipientQuery, setRecipientQuery] = useState('');
   const [recipientBusy, setRecipientBusy] = useState(false);
@@ -47,6 +147,27 @@ export default function NotificationsAdminPage() {
 
   const page = useMemo(() => Math.floor(offset / limit) + 1, [offset, limit]);
   const pages = useMemo(() => Math.max(1, Math.ceil(total / limit)), [total, limit]);
+  const textPlain = useMemo(() => extractPlainText(text), [text]);
+
+  function syncEditorValue() {
+    const html = editorRef.current?.innerHTML || '';
+    setText(html);
+  }
+
+  function applyEditorCommand(command) {
+    try {
+      editorRef.current?.focus();
+      document.execCommand(command, false, null);
+      syncEditorValue();
+    } catch {
+      // ignore editor command failures in unsupported webviews
+    }
+  }
+
+  function clearEditor() {
+    if (editorRef.current) editorRef.current.innerHTML = '';
+    setText('');
+  }
 
   async function searchRecipients() {
     if (!recipientQuery.trim()) {
@@ -79,7 +200,7 @@ export default function NotificationsAdminPage() {
     setMode('broadcast');
     setType('INFO');
     setTitle('');
-    setText('');
+    clearEditor();
     setUrl('');
     setTrainingId('');
     setRecipientQuery('');
@@ -89,10 +210,12 @@ export default function NotificationsAdminPage() {
 
   async function onSend() {
     const cleanTitle = title.trim() || 'Уведомление';
-    const cleanText = text.trim();
+    const sourceText = editorRef.current?.innerHTML ?? text;
+    const cleanText = sanitizeHtml(sourceText);
+    const cleanTextPlain = extractPlainText(cleanText);
     const cleanUrl = url.trim();
 
-    if (!cleanText) {
+    if (!cleanTextPlain) {
       toast.push('Введите текст уведомления', 'error');
       return;
     }
@@ -100,7 +223,7 @@ export default function NotificationsAdminPage() {
       toast.push('Заголовок слишком длинный (максимум 120 символов)', 'error');
       return;
     }
-    if (cleanText.length > 4000) {
+    if (cleanTextPlain.length > 4000) {
       toast.push('Текст слишком длинный (максимум 4000 символов)', 'error');
       return;
     }
@@ -253,7 +376,80 @@ export default function NotificationsAdminPage() {
         </div>
 
         <Field label="Текст">
-          <Textarea rows={4} value={text} onChange={(e) => setText(e.target.value)} placeholder="Текст уведомления..." />
+          <div className="rich-editor-wrap">
+            <div className="rich-editor-toolbar">
+              <button
+                type="button"
+                className="rich-editor-btn"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => applyEditorCommand('bold')}
+                title="Жирный"
+              >
+                B
+              </button>
+              <button
+                type="button"
+                className="rich-editor-btn"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => applyEditorCommand('italic')}
+                title="Курсив"
+              >
+                I
+              </button>
+              <button
+                type="button"
+                className="rich-editor-btn"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => applyEditorCommand('underline')}
+                title="Подчеркнутый"
+              >
+                U
+              </button>
+              <button
+                type="button"
+                className="rich-editor-btn"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => applyEditorCommand('insertUnorderedList')}
+                title="Список"
+              >
+                • List
+              </button>
+              <button
+                type="button"
+                className="rich-editor-btn"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => applyEditorCommand('insertOrderedList')}
+                title="Нумерованный список"
+              >
+                1. List
+              </button>
+              <button
+                type="button"
+                className="rich-editor-btn"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => applyEditorCommand('removeFormat')}
+                title="Очистить формат"
+              >
+                Clear
+              </button>
+            </div>
+
+            <div
+              ref={editorRef}
+              className="rich-editor"
+              contentEditable
+              role="textbox"
+              aria-multiline="true"
+              data-placeholder="Текст уведомления..."
+              suppressContentEditableWarning
+              onInput={syncEditorValue}
+              onBlur={syncEditorValue}
+            />
+          </div>
+          <div className="field-hint">
+            Можно вставлять форматированный текст (шрифты, стили, списки). Лимит: 4000 символов текста.
+            Сейчас: {textPlain.length}.
+          </div>
         </Field>
 
         {mode === 'users' ? (
@@ -373,7 +569,12 @@ export default function NotificationsAdminPage() {
                   <td>{n.type}</td>
                   <td>#{n.user_id}</td>
                   <td>{n.title}</td>
-                  <td>{n.text}</td>
+                  <td>
+                    <div
+                      className="admin-notification-text"
+                      dangerouslySetInnerHTML={{ __html: sanitizeHtml(n.text || '') }}
+                    />
+                  </td>
                 </tr>
               ))}
               {!items.length && !listBusy ? (

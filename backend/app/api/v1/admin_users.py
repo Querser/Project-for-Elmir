@@ -12,6 +12,7 @@ from app.core.responses import success_response
 from app.schemas.admin_user import AdminSetLevelRequest
 from app.services.audit_log_service import write_audit_log
 from app.services.admin_user_service import (
+    cancel_user_active_enrollments,
     get_admin_user_details,
     list_admin_users,
     mark_debt_paid_offline,
@@ -150,6 +151,43 @@ def unban_user_admin(
         data={"actor": actor_name, "target_user_id": user_id, "updated": affected},
     )
     return success_response({"updated": affected})
+
+
+@router.post("/{user_id}/cancel-enrollments", response_model=dict)
+def cancel_user_enrollments_admin(
+    user_id: int,
+    db: Session = Depends(get_db),
+    admin_actor: Any = Depends(get_current_admin_user_any),
+):
+    result = cancel_user_active_enrollments(
+        db,
+        user_id=user_id,
+        require_active_ban=True,
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    cancelled_count, has_active_ban = result
+    if not has_active_ban:
+        raise HTTPException(
+            status_code=409,
+            detail="Пользователь не находится в активном бане",
+        )
+
+    actor_id, actor_name = _actor_payload(admin_actor)
+    write_audit_log(
+        db,
+        user_id=actor_id,
+        action="ADMIN_CANCEL_BANNED_USER_ENROLLMENTS",
+        entity="user",
+        entity_id=user_id,
+        data={
+            "actor": actor_name,
+            "target_user_id": user_id,
+            "cancelled_enrollments": cancelled_count,
+        },
+    )
+    return success_response({"user_id": user_id, "cancelled": cancelled_count})
 
 
 @router.post("/{user_id}/debts/{debt_id}/mark-paid", response_model=dict)

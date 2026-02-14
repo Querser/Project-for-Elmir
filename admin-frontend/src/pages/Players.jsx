@@ -28,7 +28,7 @@ export default function PlayersPage() {
 
   async function loadLevels() {
     try {
-      const res = await apiFetchJson('/levels', { auth: false });
+      const res = await apiFetchJson('/levels', { auth: true });
       setLevels(res?.items || []);
     } catch {
       // Не блокируем работу экрана при недоступности справочника
@@ -87,7 +87,7 @@ export default function PlayersPage() {
             <Input
               value={q}
               onChange={(e) => { setOffset(0); setQ(e.target.value); }}
-              placeholder="Имя, username, телефон, telegram_id"
+              placeholder="ID, имя, username, телефон, telegram_id"
             />
           </Field>
 

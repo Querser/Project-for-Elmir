@@ -34,6 +34,7 @@ def leaderboard(
                 "user_id": u.id,
                 "telegram_id": u.telegram_id,
                 "username": username,
+                "avatar_url": u.avatar_url,
                 "first_name": u.first_name,
                 "last_name": u.last_name,
                 "rating": u.rating,
