@@ -39,6 +39,20 @@ function getInitDataFromLocation() {
   return readParam(window.location?.hash, "tgWebAppData");
 }
 
+function getTelegramIdFromLocation() {
+  if (typeof window === "undefined") return "";
+  const fromSearch = readParam(window.location?.search, "tg_id") || readParam(window.location?.search, "telegram_id");
+  if (fromSearch) return String(fromSearch).trim();
+  const fromHash = readParam(window.location?.hash, "tg_id") || readParam(window.location?.hash, "telegram_id");
+  return String(fromHash || "").trim();
+}
+
+function normalizeTelegramId(value) {
+  const s = String(value ?? "").trim();
+  if (!s) return "";
+  return /^-?\d+$/.test(s) ? s : "";
+}
+
 function parseUserFromInitData(initData) {
   const raw = String(initData || "").trim();
   if (!raw) return null;
@@ -66,7 +80,11 @@ export function getTelegramUser() {
   const tg = getTelegramWebApp();
   const fromSdk = tg?.initDataUnsafe?.user ?? null;
   if (fromSdk && fromSdk.id != null) return fromSdk;
-  return parseUserFromInitData(getTelegramInitData().initData);
+  const parsed = parseUserFromInitData(getTelegramInitData().initData);
+  if (parsed && parsed.id != null) return parsed;
+  const fromLocation = normalizeTelegramId(getTelegramIdFromLocation());
+  if (fromLocation) return { id: Number(fromLocation) };
+  return null;
 }
 
 export function getTelegramUserId() {
@@ -184,7 +202,8 @@ export function buildAuthHeaders() {
 
   const { initData, initDataUnsafe } = getTelegramInitData();
   const parsedUser = parseUserFromInitData(initData);
-  const tgId = initDataUnsafe?.user?.id ?? parsedUser?.id ?? null;
+  const locationTgId = normalizeTelegramId(getTelegramIdFromLocation());
+  const tgId = initDataUnsafe?.user?.id ?? parsedUser?.id ?? locationTgId ?? null;
 
   if (initData) {
     headers["X-Telegram-Init-Data"] = initData;

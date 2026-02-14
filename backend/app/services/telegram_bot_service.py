@@ -5,6 +5,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -157,6 +158,23 @@ def _safe_username(username: str | None) -> str | None:
     return v.lstrip("@")
 
 
+def _append_url_query_param(url: str, key: str, value: str | int | None) -> str:
+    base = (url or "").strip()
+    if not base:
+        return base
+    v = str(value).strip() if value is not None else ""
+    if not v:
+        return base
+    try:
+        parts = urlsplit(base)
+        query = dict(parse_qsl(parts.query, keep_blank_values=True))
+        query[str(key)] = v
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+    except Exception:
+        sep = "&" if "?" in base else "?"
+        return f"{base}{sep}{key}={v}"
+
+
 def _is_admin_user(user: User) -> bool:
     if bool(getattr(user, "is_admin", False)):
         return True
@@ -177,8 +195,17 @@ def _is_admin_user(user: User) -> bool:
     return False
 
 
-def _main_menu_keyboard(*, include_admin: bool, miniapp_url: str, admin_url: str) -> dict[str, Any]:
+def _main_menu_keyboard(
+    *,
+    include_admin: bool,
+    miniapp_url: str,
+    admin_url: str,
+    telegram_id: int | None = None,
+) -> dict[str, Any]:
     keyboard: list[list[dict[str, Any]]] = []
+
+    miniapp_url = _append_url_query_param(miniapp_url, "tg_id", telegram_id)
+    admin_url = _append_url_query_param(admin_url, "tg_id", telegram_id)
 
     if miniapp_url:
         keyboard.append(
@@ -429,6 +456,7 @@ def _send_main_menu(db: Session, user: User) -> None:
         include_admin=_is_admin_user(user),
         miniapp_url=(settings.telegram_webapp_url or "").strip(),
         admin_url=(settings.telegram_admin_webapp_url or "").strip(),
+        telegram_id=tg_id,
     )
 
     send_bot_message_to_user(
@@ -628,4 +656,3 @@ def set_bot_webhook(*, webhook_url: str, secret_token: str = "") -> dict[str, An
 
 def delete_bot_webhook() -> dict[str, Any]:
     return _bot_api.delete_webhook()
-
