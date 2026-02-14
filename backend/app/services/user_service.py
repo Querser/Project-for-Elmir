@@ -1,4 +1,3 @@
-# app/services/user_service.py
 from __future__ import annotations
 
 from typing import Optional
@@ -8,23 +7,14 @@ from sqlalchemy.orm import Session
 from app.core.exceptions import AppException
 from app.models.user import User
 from app.schemas.user import UserProfileUpdate
+from app.services.level_service import get_default_level_id
 
 
-# --------- Нормализация телефона --------- #
 def normalize_phone(raw_phone: str) -> str:
     """
-    Нормализация под российский номер:
-    - оставляем только цифры;
-    - допускаем 10 цифр (9991234567) или 11 цифр, если начинается с 7/8;
-    - приводим к формату +7XXXXXXXXXX.
-
-    Примеры допустимого ввода:
-      +7 (999) 123-45-67
-      8 999 123-45-67
-      9991234567
+    Normalize Russian phone numbers to +7XXXXXXXXXX.
     """
     if raw_phone is None:
-        # на всякий случай, хотя по типу str сюда обычно не прилетает None
         raise AppException(message="Телефон не может быть пустым. Пример: +7 (999) 123-45-67")
 
     raw_phone = str(raw_phone).strip()
@@ -33,8 +23,6 @@ def normalize_phone(raw_phone: str) -> str:
 
     digits = "".join(ch for ch in raw_phone if ch.isdigit())
 
-    # 8 999 123-45-67  -> 89991234567 -> 9991234567
-    # +7 (999) 1234567 -> 79991234567 -> 9991234567
     if len(digits) == 11 and digits[0] in ("7", "8"):
         digits = digits[1:]
     elif len(digits) == 10:
@@ -48,7 +36,6 @@ def normalize_phone(raw_phone: str) -> str:
             )
         )
 
-    # После среза 11->10 гарантируем, что осталось ровно 10 цифр
     if len(digits) != 10:
         raise AppException(
             message=(
@@ -60,7 +47,6 @@ def normalize_phone(raw_phone: str) -> str:
     return "+7" + digits
 
 
-# --------- Создание/обновление пользователя из Telegram --------- #
 def get_or_create_user_from_telegram(
     db: Session,
     *,
@@ -71,8 +57,7 @@ def get_or_create_user_from_telegram(
     phone: Optional[str] = None,
 ) -> User:
     """
-    Создаёт или обновляет пользователя по данным из Telegram.
-    Вызывается из middleware после успешной валидации initData.
+    Create/update user from Telegram payload.
     """
     telegram_id_int = int(telegram_id)
 
@@ -86,20 +71,20 @@ def get_or_create_user_from_telegram(
     if phone:
         normalized_phone = normalize_phone(phone)
 
+    default_level_id = get_default_level_id(db)
+
     if user is None:
-        # новый пользователь – заполняем всё, что пришло из Telegram
         user = User(
             telegram_id=telegram_id_int,
             username=username,
             first_name=first_name,
             last_name=last_name,
             phone=normalized_phone,
+            level_id=default_level_id,
             is_active=True,
         )
         db.add(user)
     else:
-        # существующий пользователь:
-        # НЕ перезатираем вручную изменённый профиль данными из Telegram
         if username is not None and not user.username:
             user.username = username or user.username
 
@@ -109,7 +94,6 @@ def get_or_create_user_from_telegram(
         if last_name is not None and not user.last_name:
             user.last_name = last_name or user.last_name
 
-        # телефон из Telegram используем только если у пользователя ещё нет телефона
         if normalized_phone and not user.phone:
             other = (
                 db.query(User)
@@ -122,27 +106,25 @@ def get_or_create_user_from_telegram(
             if not other:
                 user.phone = normalized_phone
 
+        # Backfill old accounts without level.
+        if user.level_id is None and default_level_id is not None:
+            user.level_id = default_level_id
+
     db.commit()
     db.refresh(user)
     return user
 
 
-# --------- Обновление профиля пользователя через API --------- #
 def update_user_profile(
     db: Session,
     user: User,
     data: UserProfileUpdate,
 ) -> User:
     """
-    Обновляет профиль (имя, телефон, пол, дата рождения, уровень и т.п.).
-    ВАЖНО: current_user приходит из другой сессии (из middleware),
-    поэтому сначала "прикрепляем" его к текущей сессии через merge().
+    Update profile fields from API payload.
     """
-
-    # Гарантируем, что объект user прикреплён к сессии db
     user = db.merge(user)
 
-    # Имя / фамилия / username
     if data.first_name is not None:
         user.first_name = data.first_name.strip() or None
 
@@ -152,7 +134,6 @@ def update_user_profile(
     if data.username is not None:
         user.username = data.username.strip() or None
 
-    # Телефон
     if data.phone is not None:
         normalized_phone = normalize_phone(data.phone)
 
@@ -169,19 +150,15 @@ def update_user_profile(
 
         user.phone = normalized_phone
 
-    # Пол
     if data.gender is not None:
         user.gender = data.gender
 
-    # Дата рождения
     if data.birth_date is not None:
         user.birth_date = data.birth_date
 
-    # Уровень
     if data.level_id is not None:
         user.level_id = data.level_id
 
-    # Флаг видимости Telegram
     if data.is_telegram_public is not None:
         user.is_telegram_public = data.is_telegram_public
 

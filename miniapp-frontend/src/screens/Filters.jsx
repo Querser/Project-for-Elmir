@@ -2,6 +2,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { apiFetch } from '../api';
 import RefreshButton from '../components/RefreshButton';
 
+const TRAININGS_PAGE_LIMIT = 200;
+const TRAININGS_MAX_PAGES = 30;
+const SCHEDULE_DAYS_BACK = 31;
+const SCHEDULE_DAYS_FORWARD = 180;
+
 function normalizeItems(data) {
   if (!data) return [];
   if (Array.isArray(data)) return data;
@@ -20,15 +25,32 @@ function toggle(arr, value) {
   else set.add(value);
   return Array.from(set);
 }
+function startOfDay(d) {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
 
-export default function Filters({ initialFilters, onApply, onBack }) {
-  const [draft, setDraft] = useState(() => ({
+function addDays(d, days) {
+  const x = new Date(d);
+  x.setDate(x.getDate() + days);
+  return x;
+}
+
+function defaultDraft(initialFilters) {
+  return {
     locationIds: initialFilters?.locationIds ?? [],
     coachNames: initialFilters?.coachNames ?? [],
     levelNames: initialFilters?.levelNames ?? [],
     kinds: initialFilters?.kinds ?? [],
     types: initialFilters?.types ?? [],
-  }));
+    startTimeFrom: initialFilters?.startTimeFrom ?? '',
+    startTimeTo: initialFilters?.startTimeTo ?? '',
+  };
+}
+
+export default function Filters({ initialFilters, onApply, onBack }) {
+  const [draft, setDraft] = useState(() => defaultDraft(initialFilters));
 
   const [locations, setLocations] = useState([]);
   const [levels, setLevels] = useState([]);
@@ -39,6 +61,16 @@ export default function Filters({ initialFilters, onApply, onBack }) {
   const [loading, setLoading] = useState(true);
   const [reloadTick, setReloadTick] = useState(0);
 
+  const dateRange = useMemo(() => {
+    const today = startOfDay(new Date());
+    const from = addDays(today, -SCHEDULE_DAYS_BACK);
+    const to = addDays(today, SCHEDULE_DAYS_FORWARD);
+    return {
+      fromIso: from.toISOString(),
+      toIso: addDays(startOfDay(to), 1).toISOString(),
+    };
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -46,10 +78,9 @@ export default function Filters({ initialFilters, onApply, onBack }) {
       try {
         setLoading(true);
 
-        const [locRes, lvlRes, trRes] = await Promise.allSettled([
+        const [locRes, lvlRes] = await Promise.allSettled([
           apiFetch('/api/v1/locations?limit=500&offset=0&only_with_trainings=true'),
           apiFetch('/api/v1/levels'),
-          apiFetch('/api/v1/trainings?skip=0&limit=200'),
         ]);
 
         if (cancelled) return;
@@ -62,17 +93,42 @@ export default function Filters({ initialFilters, onApply, onBack }) {
           setLevels(normalizeItems(lvlRes.value));
         }
 
-        if (trRes.status === 'fulfilled') {
-          const items = normalizeItems(trRes.value);
+        const allTrainings = [];
+        let offset = 0;
+        let total = null;
 
-          setCoaches(uniqueSorted(items.map((t) => (t?.coach_name ?? '').trim()).filter(Boolean)));
-          setKinds(uniqueSorted(items.map((t) => (t?.title ?? '').trim()).filter(Boolean)));
+        for (let page = 0; page < TRAININGS_MAX_PAGES; page += 1) {
+          const params = new URLSearchParams();
+          params.set('skip', String(offset));
+          params.set('limit', String(TRAININGS_PAGE_LIMIT));
+          params.set('date_from', dateRange.fromIso);
+          params.set('date_to', dateRange.toIso);
 
-          const rawTypes = items
-            .map((t) => (t?.type ?? t?.format ?? '').trim())
-            .filter(Boolean);
-          setTypes(uniqueSorted(rawTypes));
+          const trRes = await apiFetch(`/api/v1/trainings?${params.toString()}`);
+          const items = normalizeItems(trRes);
+
+          const apiTotal = Number(trRes?.total);
+          if (Number.isFinite(apiTotal) && apiTotal >= 0) {
+            total = apiTotal;
+          }
+
+          if (!items.length) break;
+          allTrainings.push(...items);
+          offset += items.length;
+
+          if (total != null && offset >= total) break;
+          if (items.length < TRAININGS_PAGE_LIMIT && total == null) break;
         }
+
+        if (cancelled) return;
+
+        setCoaches(uniqueSorted(allTrainings.map((t) => (t?.coach_name ?? '').trim()).filter(Boolean)));
+        setKinds(uniqueSorted(allTrainings.map((t) => (t?.title ?? '').trim()).filter(Boolean)));
+
+        const rawTypes = allTrainings
+          .map((t) => (t?.type ?? t?.format ?? '').trim())
+          .filter(Boolean);
+        setTypes(uniqueSorted(rawTypes));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -81,7 +137,7 @@ export default function Filters({ initialFilters, onApply, onBack }) {
     return () => {
       cancelled = true;
     };
-  }, [reloadTick]);
+  }, [dateRange.fromIso, dateRange.toIso, reloadTick]);
 
   const viewKinds = useMemo(() => kinds.slice(0, 8), [kinds]);
   const viewCoaches = useMemo(() => coaches.slice(0, 12), [coaches]);
@@ -231,19 +287,36 @@ export default function Filters({ initialFilters, onApply, onBack }) {
           </div>
         </div>
 
+        <div className="filters-section">
+          <h2>Время начала тренировки</h2>
+          <div className="filters-panel" style={{ gap: 10 }}>
+            <label className="field" style={{ margin: 0 }}>
+              <div className="field-label">С</div>
+              <input
+                type="time"
+                className="input"
+                value={draft.startTimeFrom}
+                onChange={(ev) => setDraft((s) => ({ ...s, startTimeFrom: ev.target.value }))}
+              />
+            </label>
+
+            <label className="field" style={{ margin: 0 }}>
+              <div className="field-label">По</div>
+              <input
+                type="time"
+                className="input"
+                value={draft.startTimeTo}
+                onChange={(ev) => setDraft((s) => ({ ...s, startTimeTo: ev.target.value }))}
+              />
+            </label>
+          </div>
+        </div>
+
         <div className="actions" style={{ marginTop: 14 }}>
           <button
             type="button"
             className="secondary-btn"
-            onClick={() =>
-              setDraft({
-                locationIds: [],
-                coachNames: [],
-                levelNames: [],
-                kinds: [],
-                types: [],
-              })
-            }
+            onClick={() => setDraft(defaultDraft({}))}
           >
             Сбросить
           </button>

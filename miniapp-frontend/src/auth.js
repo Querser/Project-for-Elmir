@@ -91,22 +91,27 @@ export function getAuthToken() {
 }
 
 /**
- * Заголовки авторизации:
- * - В Telegram: X-Telegram-Init-Data (+ дублируем X-Telegram-Id из initDataUnsafe.user.id)
- * - В браузере (dev): X-Telegram-Id или X-User-Id из localStorage
- * - Если backend вернёт токен (опционально) — добавим Authorization
+ * Auth headers:
+ * - Telegram: X-Telegram-Init-Data + X-Telegram-Id
+ * - Browser DEV: X-Telegram-Id / X-User-Id from localStorage
+ * - Optional bearer token from localStorage
  */
 export function buildAuthHeaders() {
   const headers = {};
 
   const { initData, initDataUnsafe } = getTelegramInitData();
+  const tgId = initDataUnsafe?.user?.id;
+
   if (initData) {
     headers["X-Telegram-Init-Data"] = initData;
+  }
 
-    // ВАЖНО: текущий бэкенд авторизует через X-Telegram-Id (core.deps.get_current_user)
-    const tgId = initDataUnsafe?.user?.id;
-    if (tgId) headers["X-Telegram-Id"] = String(tgId);
-  } else {
+  if (tgId != null && tgId !== "") {
+    headers["X-Telegram-Id"] = String(tgId);
+  }
+
+  // Use DEV auth only when Telegram identity is absent.
+  if (!initData && (tgId == null || tgId === "")) {
     const dev = getDevAuth();
     if (dev.telegramId) headers["X-Telegram-Id"] = dev.telegramId;
     if (dev.userId) headers["X-User-Id"] = dev.userId;
@@ -118,20 +123,6 @@ export function buildAuthHeaders() {
   return headers;
 }
 
-/**
- * =========================
- * Совместимость со старым App.jsx
- * =========================
- * В логах сборки видно:
- *   import { initTelegramAuth, getTelegramId } from './auth'
- * Поэтому добавляем эти экспорты как алиасы, НЕ ломая текущую архитектуру.
- */
-
-/**
- * getTelegramId():
- * - в Telegram вернёт tg user id
- * - в браузере вернёт dev telegram id (если задан)
- */
 export function getTelegramId() {
   const tgId = getTelegramUserId();
   if (tgId) return tgId;
@@ -140,11 +131,6 @@ export function getTelegramId() {
   return dev.telegramId || "";
 }
 
-/**
- * initTelegramAuth():
- * Мягкая инициализация Telegram WebApp (ready/expand).
- * Ничего не “ломает”, даже если не в Telegram.
- */
 export async function initTelegramAuth() {
   const tg = getTelegramWebApp();
   try {
@@ -154,7 +140,6 @@ export async function initTelegramAuth() {
     // ignore
   }
 
-  // Возвращаем полезные данные (если App.jsx их использует — ок; если нет — тоже ок)
   const { initData, initDataUnsafe } = getTelegramInitData();
   return {
     telegramId: getTelegramId(),

@@ -41,7 +41,7 @@ function pickGender(profile) {
 
 function normalizeLevelLabel(nameRaw) {
   const n = normalizeStr(nameRaw).toLowerCase().replace(/\s+/g, '');
-  if (!n) return '—';
+  if (!n) return 'Новичок';
   if (n.includes('нович')) return 'Новичок';
   if (n.includes('средний-') || n.includes('средний−')) return 'Средний-';
   if (n === 'средний') return 'Средний';

@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import { apiFetch } from '../api';
-import { clearAuth } from '../auth';
 import RefreshButton from '../components/RefreshButton';
 
 const DEFAULT_PUBLIC_TEXTS = {
@@ -44,14 +43,14 @@ function openExternal(url) {
       tg.openLink(href);
       return;
     }
-  } catch (e) {
-    void e;
+  } catch {
+    // ignore
   }
 
   try {
     window.open(href, '_blank', 'noopener,noreferrer');
-  } catch (e) {
-    void e;
+  } catch {
+    // ignore
   }
 }
 
@@ -95,7 +94,7 @@ function RichText({ text }) {
   );
 }
 
-export default function More({ darkMode, onToggleDarkMode, onOpenProfile, onLogout }) {
+export default function More({ darkMode, onToggleDarkMode, onOpenProfile }) {
   const [profile, setProfile] = useState(null);
   const [rating, setRating] = useState(null);
   const [publicTexts, setPublicTexts] = useState(DEFAULT_PUBLIC_TEXTS);
@@ -160,15 +159,6 @@ export default function More({ darkMode, onToggleDarkMode, onOpenProfile, onLogo
   }, [rating]);
 
   const avatarUrl = useMemo(() => resolveAvatarUrl(profile?.avatar_url), [profile]);
-
-  const handleLogout = () => {
-    if (typeof onLogout === 'function') {
-      onLogout();
-      return;
-    }
-    clearAuth();
-    window.location.reload();
-  };
 
   const toggleTheme = (checked) => {
     if (isThemeControlled) {
@@ -276,24 +266,6 @@ export default function More({ darkMode, onToggleDarkMode, onOpenProfile, onLogo
                   />
                   <span className="toggle-circle" />
                 </label>
-              </div>
-
-              <div className="settings-item" role="button" tabIndex={0} onClick={handleLogout}>
-                <div className="settings-item-left">
-                  <div
-                    className="settings-icon"
-                    style={{ background: 'rgba(239,68,68,.1)', color: 'var(--danger)' }}
-                  >
-                    ⎋
-                  </div>
-                  <div>
-                    <div className="settings-label" style={{ color: 'var(--danger)' }}>
-                      Выйти
-                    </div>
-                    <div className="settings-value">Сбросить авторизацию</div>
-                  </div>
-                </div>
-                <div className="settings-chevron">›</div>
               </div>
             </div>
           </>

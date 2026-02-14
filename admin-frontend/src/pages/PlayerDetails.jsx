@@ -11,6 +11,9 @@ import { formatDate, formatDateTime, formatMoney, toIsoFromDatetimeLocal } from 
 import { useToast } from '../components/Toast.jsx';
 import { filterCanonicalLevels } from '../lib/levels.js';
 
+const URL_RE = /^https?:\/\/[^\s]+$/i;
+const BAN_REASON_RE = /^[\p{L}\p{N}\s.,:;()"'!?+\-/]{3,500}$/u;
+
 export default function PlayerDetailsPage({ userId }) {
   const toast = useToast();
 
@@ -90,8 +93,22 @@ export default function PlayerDetailsPage({ userId }) {
   }
 
   async function onBanSubmit() {
-    if (!banReason.trim()) {
+    const reason = banReason.trim();
+
+    if (!reason) {
       toast.push('Укажите причину бана', 'error');
+      return;
+    }
+    if (reason.length < 3) {
+      toast.push('Причина бана слишком короткая (минимум 3 символа)', 'error');
+      return;
+    }
+    if (reason.length > 500) {
+      toast.push('Причина бана слишком длинная (максимум 500 символов)', 'error');
+      return;
+    }
+    if (!BAN_REASON_RE.test(reason)) {
+      toast.push('Причина бана содержит недопустимые символы', 'error');
       return;
     }
 
@@ -101,7 +118,7 @@ export default function PlayerDetailsPage({ userId }) {
         method: 'POST',
         auth: true,
         body: {
-          reason: banReason.trim(),
+          reason,
           until: banUntil ? toIsoFromDatetimeLocal(banUntil) : null,
         },
       });
@@ -134,8 +151,24 @@ export default function PlayerDetailsPage({ userId }) {
   }
 
   async function onSendNotificationToUser() {
-    if (!notifyText.trim()) {
+    const cleanTitle = notifyTitle.trim() || 'Уведомление';
+    const cleanText = notifyText.trim();
+    const cleanUrl = notifyUrl.trim();
+
+    if (!cleanText) {
       toast.push('Введите текст уведомления', 'error');
+      return;
+    }
+    if (cleanTitle.length > 120) {
+      toast.push('Заголовок слишком длинный (максимум 120 символов)', 'error');
+      return;
+    }
+    if (cleanText.length > 4000) {
+      toast.push('Текст слишком длинный (максимум 4000 символов)', 'error');
+      return;
+    }
+    if (cleanUrl && !URL_RE.test(cleanUrl)) {
+      toast.push('Ссылка должна начинаться с http:// или https://', 'error');
       return;
     }
 
@@ -147,9 +180,9 @@ export default function PlayerDetailsPage({ userId }) {
         body: {
           user_ids: [Number(userId)],
           type: 'SYSTEM',
-          title: notifyTitle.trim() || 'Уведомление',
-          text: notifyText.trim(),
-          url: notifyUrl.trim() || null,
+          title: cleanTitle,
+          text: cleanText,
+          url: cleanUrl || null,
         },
       });
       toast.push('Уведомление отправлено', 'success');

@@ -37,6 +37,8 @@ export default function App() {
     levelNames: [],
     kinds: [],
     types: [],
+    startTimeFrom: '',
+    startTimeTo: '',
   });
 
   const [isDark, setIsDark] = useState(() => {

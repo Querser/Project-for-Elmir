@@ -3,8 +3,11 @@ import { apiFetch } from '../api';
 import RefreshButton from '../components/RefreshButton';
 import TrainingCard from '../components/TrainingCard';
 
-const TRAININGS_LIMIT = 200;
+const TRAININGS_PAGE_LIMIT = 200;
+const TRAININGS_MAX_PAGES = 30;
 const LOCATIONS_LIMIT = 500;
+const SCHEDULE_DAYS_BACK = 31;
+const SCHEDULE_DAYS_FORWARD = 180;
 
 function pad2(n) {
   return String(n).padStart(2, '0');
@@ -146,10 +149,30 @@ function getTrainingLevelNames(t) {
   return uniq;
 }
 
+function parseTimeToMinutes(value) {
+  if (!value) return null;
+  const m = /^(\d{2}):(\d{2})$/.exec(String(value).trim());
+  if (!m) return null;
+  const hours = Number(m[1]);
+  const minutes = Number(m[2]);
+  if (!Number.isInteger(hours) || !Number.isInteger(minutes)) return null;
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
+  return hours * 60 + minutes;
+}
+
+function getTrainingStartMinutes(training) {
+  const dt = parseStartAt(training);
+  if (!dt) return null;
+  return dt.getHours() * 60 + dt.getMinutes();
+}
+
 function isFiltersEmpty(filters) {
   if (!filters) return true;
-  const keys = ['kinds', 'types', 'locationIds', 'coachNames', 'levelNames'];
-  return keys.every((k) => !Array.isArray(filters[k]) || filters[k].length === 0);
+  const listKeys = ['kinds', 'types', 'locationIds', 'coachNames', 'levelNames'];
+  const hasLists = listKeys.some((k) => Array.isArray(filters[k]) && filters[k].length > 0);
+  const hasTimeFrom = Boolean(String(filters.startTimeFrom || '').trim());
+  const hasTimeTo = Boolean(String(filters.startTimeTo || '').trim());
+  return !hasLists && !hasTimeFrom && !hasTimeTo;
 }
 
 function applyFilters(trainings, filters) {
@@ -161,6 +184,9 @@ function applyFilters(trainings, filters) {
   const wantedLocations = new Set((filters?.locationIds || []).map(normalizeId).filter(Boolean));
   const wantedCoaches = new Set((filters?.coachNames || []).map(normalizeString).filter(Boolean));
   const wantedLevels = new Set((filters?.levelNames || []).map(normalizeString).filter(Boolean));
+
+  const startTimeFrom = parseTimeToMinutes(filters?.startTimeFrom);
+  const startTimeTo = parseTimeToMinutes(filters?.startTimeTo);
 
   return trainings.filter((t) => {
     if (wantedKinds.size > 0) {
@@ -189,6 +215,24 @@ function applyFilters(trainings, filters) {
       if (!hit) return false;
     }
 
+    if (startTimeFrom != null || startTimeTo != null) {
+      const startMinutes = getTrainingStartMinutes(t);
+      if (startMinutes == null) return false;
+
+      if (startTimeFrom != null && startTimeTo != null) {
+        if (startTimeFrom <= startTimeTo) {
+          if (startMinutes < startTimeFrom || startMinutes > startTimeTo) return false;
+        } else {
+          const inCrossDayRange = startMinutes >= startTimeFrom || startMinutes <= startTimeTo;
+          if (!inCrossDayRange) return false;
+        }
+      } else if (startTimeFrom != null) {
+        if (startMinutes < startTimeFrom) return false;
+      } else if (startTimeTo != null) {
+        if (startMinutes > startTimeTo) return false;
+      }
+    }
+
     return true;
   });
 }
@@ -209,10 +253,15 @@ export default function Schedule({
   const [error, setError] = useState('');
 
   const today = useMemo(() => startOfDay(new Date()), []);
-  const daysRange = useMemo(() => {
-    const start = addDays(today, -31);
-    return Array.from({ length: 63 }, (_, i) => addDays(start, i));
-  }, [today]);
+  const rangeStartDay = useMemo(() => addDays(today, -SCHEDULE_DAYS_BACK), [today]);
+  const rangeEndDay = useMemo(() => addDays(today, SCHEDULE_DAYS_FORWARD), [today]);
+  const daysRange = useMemo(
+    () => Array.from({ length: SCHEDULE_DAYS_BACK + SCHEDULE_DAYS_FORWARD + 1 }, (_, i) => addDays(rangeStartDay, i)),
+    [rangeStartDay],
+  );
+
+  const rangeStartIso = useMemo(() => startOfDay(rangeStartDay).toISOString(), [rangeStartDay]);
+  const rangeEndIso = useMemo(() => addDays(startOfDay(rangeEndDay), 1).toISOString(), [rangeEndDay]);
 
   const [selectedDay, setSelectedDay] = useState(() => dateKeyLocal(today));
   const weekStripRef = useRef(null);
@@ -224,8 +273,40 @@ export default function Schedule({
       setLoading(true);
       setError('');
 
-      const trData = await apiFetch(`/api/v1/trainings?skip=0&limit=${TRAININGS_LIMIT}`);
-      const trainings = normalizeTrainingsResponse(trData);
+      const trainings = [];
+      let offset = 0;
+      let total = null;
+
+      for (let page = 0; page < TRAININGS_MAX_PAGES; page += 1) {
+        const params = new URLSearchParams();
+        params.set('skip', String(offset));
+        params.set('limit', String(TRAININGS_PAGE_LIMIT));
+        params.set('date_from', rangeStartIso);
+        params.set('date_to', rangeEndIso);
+
+        const trData = await apiFetch(`/api/v1/trainings?${params.toString()}`);
+        const pageItems = normalizeTrainingsResponse(trData);
+
+        const apiTotal = Number(trData?.total);
+        if (Number.isFinite(apiTotal) && apiTotal >= 0) {
+          total = apiTotal;
+        }
+
+        if (!pageItems.length) break;
+        trainings.push(...pageItems);
+        offset += pageItems.length;
+
+        if (total != null && offset >= total) break;
+        if (pageItems.length < TRAININGS_PAGE_LIMIT && total == null) break;
+      }
+
+      const byId = new Map();
+      for (const training of trainings) {
+        const id = safeTrainingId(training);
+        if (id == null) continue;
+        byId.set(String(id), training);
+      }
+      const dedupedTrainings = byId.size > 0 ? Array.from(byId.values()) : trainings;
 
       let locMap = {};
       try {
@@ -240,11 +321,11 @@ export default function Schedule({
           if (!map[String(id)]) map[String(id)] = label || '';
         }
         locMap = map;
-      } catch (e) {
-        void e;
+      } catch {
+        // ignore locations lookup errors
       }
 
-      const enriched = trainings.map((t) => {
+      const enriched = dedupedTrainings.map((t) => {
         const locationId = getTrainingLocationId(t);
         const label = locationId ? (locMap[String(locationId)] || '') : '';
 
@@ -275,7 +356,7 @@ export default function Schedule({
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [rangeEndIso, rangeStartIso]);
 
   useEffect(() => {
     loadSchedule();
@@ -308,10 +389,13 @@ export default function Schedule({
 
   const activeFiltersCount = useMemo(() => {
     if (!filters) return 0;
-    return ['kinds', 'types', 'locationIds', 'coachNames', 'levelNames'].reduce((acc, k) => {
+    const listCount = ['kinds', 'types', 'locationIds', 'coachNames', 'levelNames'].reduce((acc, k) => {
       const v = filters[k];
       return acc + (Array.isArray(v) ? v.length : 0);
     }, 0);
+
+    const timeCount = [filters.startTimeFrom, filters.startTimeTo].filter((v) => String(v || '').trim()).length;
+    return listCount + timeCount;
   }, [filters]);
 
   return (

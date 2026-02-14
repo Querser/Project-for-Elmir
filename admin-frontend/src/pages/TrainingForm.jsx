@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import AdminLayout from '../components/AdminLayout.jsx';
 import Card from '../components/Card.jsx';
 import Button from '../components/Button.jsx';
@@ -14,6 +14,10 @@ import { CANONICAL_LEVEL_NAMES, normalizeLevelName } from '../lib/levels.js';
 const MAX_UPLOAD_MB = 50;
 const DEFAULT_MIN_LEVEL = CANONICAL_LEVEL_NAMES[0];
 const DEFAULT_MAX_LEVEL = CANONICAL_LEVEL_NAMES[CANONICAL_LEVEL_NAMES.length - 1];
+const TITLE_RE = /^[\p{L}\p{N}][\p{L}\p{N}\s.,:()"'!?+\-/]{1,99}$/u;
+const PERSON_NAME_RE = /^[\p{L}][\p{L}\s.'-]{1,99}$/u;
+const LOCATION_RE = /^[\p{L}\p{N}][\p{L}\p{N}\s.,:()"'!?+\-/]{1,119}$/u;
+const MEDIA_URL_RE = /^(https?:\/\/[^\s]+|\/media\/trainings\/[^\s]+)$/i;
 
 function resolveTrainingLevelName(value, fallback) {
   return normalizeLevelName(value) || fallback;
@@ -141,31 +145,71 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
   function validate() {
     const nextErrors = {};
 
-    if (!form.title.trim() || form.title.trim().length < 2) {
-      nextErrors.title = 'Введите название (минимум 2 символа)';
+    const title = String(form.title || '').trim();
+    if (!title) {
+      nextErrors.title = 'Введите название тренировки';
+    } else if (title.length < 2) {
+      nextErrors.title = 'Название должно содержать минимум 2 символа';
+    } else if (title.length > 100) {
+      nextErrors.title = 'Название слишком длинное (максимум 100 символов)';
+    } else if (!TITLE_RE.test(title)) {
+      nextErrors.title = 'Название содержит недопустимые символы';
     }
+
     if (!form.start_at_local) {
-      nextErrors.start_at_local = 'Выберите дату и время';
+      nextErrors.start_at_local = 'Выберите дату и время начала';
     }
 
-    const duration = normalizeNumber(form.duration_minutes, NaN);
-    if (!Number.isFinite(duration) || duration <= 0) {
-      nextErrors.duration_minutes = 'Длительность должна быть больше 0';
+    const durationRaw = String(form.duration_minutes ?? '').replace(',', '.').trim();
+    const duration = Number(durationRaw);
+    if (!durationRaw) {
+      nextErrors.duration_minutes = 'Укажите длительность тренировки';
+    } else if (!Number.isFinite(duration)) {
+      nextErrors.duration_minutes = 'Длительность должна быть числом';
+    } else if (!Number.isInteger(duration)) {
+      nextErrors.duration_minutes = 'Длительность указывается только в целых минутах';
+    } else if (duration < 1) {
+      nextErrors.duration_minutes = 'Минимальная длительность — 1 минута';
+    } else if (duration > 600) {
+      nextErrors.duration_minutes = 'Слишком длинная тренировка: максимум 600 минут';
     }
 
-    const price = normalizeNumber(form.price, NaN);
-    if (!Number.isFinite(price) || price < 0) {
-      nextErrors.price = 'Цена должна быть числом >= 0';
+    const priceRaw = String(form.price ?? '').replace(',', '.').trim();
+    const price = Number(priceRaw);
+    if (!priceRaw) {
+      nextErrors.price = 'Укажите стоимость';
+    } else if (!Number.isFinite(price)) {
+      nextErrors.price = 'Стоимость должна быть числом';
+    } else if (price < 0) {
+      nextErrors.price = 'Стоимость не может быть отрицательной';
+    } else if (price > 1000000) {
+      nextErrors.price = 'Стоимость слишком большая (максимум 1 000 000 ₽)';
+    } else if (!/^\d+([.,]\d{1,2})?$/.test(priceRaw)) {
+      nextErrors.price = 'Стоимость может содержать максимум 2 знака после запятой';
     }
 
-    const capMain = normalizeNumber(form.capacity_main, NaN);
-    if (!Number.isFinite(capMain) || capMain < 0) {
-      nextErrors.capacity_main = 'Вместимость основы должна быть числом >= 0';
+    const capMainRaw = String(form.capacity_main ?? '').trim();
+    const capMain = Number(capMainRaw);
+    if (!capMainRaw) {
+      nextErrors.capacity_main = 'Укажите вместимость основы';
+    } else if (!Number.isFinite(capMain) || !Number.isInteger(capMain)) {
+      nextErrors.capacity_main = 'Вместимость основы должна быть целым числом';
+    } else if (capMain < 0) {
+      nextErrors.capacity_main = 'Вместимость основы не может быть отрицательной';
+    } else if (capMain > 1000) {
+      nextErrors.capacity_main = 'Слишком большая вместимость основы (максимум 1000)';
     }
 
-    const capReserve = normalizeNumber(form.capacity_reserve, NaN);
-    if (!Number.isFinite(capReserve) || capReserve < 0) {
-      nextErrors.capacity_reserve = 'Вместимость резерва должна быть числом >= 0';
+    const capReserveRaw = String(form.capacity_reserve ?? '').trim();
+    const capReserve = Number(capReserveRaw);
+    if (!capReserveRaw) {
+      nextErrors.capacity_reserve = 'Укажите вместимость резерва';
+    } else if (!Number.isFinite(capReserve) || !Number.isInteger(capReserve)) {
+      nextErrors.capacity_reserve = 'Вместимость резерва должна быть целым числом';
+    } else if (capReserve < 0) {
+      nextErrors.capacity_reserve = 'Вместимость резерва не может быть отрицательной';
+    } else if (capReserve > 1000) {
+      nextErrors.capacity_reserve = 'Слишком большая вместимость резерва (максимум 1000)';
     }
 
     const minIndex = CANONICAL_LEVEL_NAMES.indexOf(form.min_level_name);
@@ -180,14 +224,48 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
 
     if (!selectedLocationId && !form.location_name.trim()) {
       nextErrors.location_name = 'Выберите локацию из списка или введите новую';
+    } else if (!selectedLocationId) {
+      const locationName = String(form.location_name || '').trim();
+      if (locationName.length > 120) {
+        nextErrors.location_name = 'Название локации слишком длинное (максимум 120 символов)';
+      } else if (!LOCATION_RE.test(locationName)) {
+        nextErrors.location_name = 'Название локации содержит недопустимые символы';
+      }
+    }
+
+    const coachName = String(form.coach_name || '').trim();
+    if (coachName) {
+      if (coachName.length > 100) {
+        nextErrors.coach_name = 'Имя тренера слишком длинное (максимум 100 символов)';
+      } else if (!PERSON_NAME_RE.test(coachName)) {
+        nextErrors.coach_name = 'Имя тренера содержит недопустимые символы';
+      }
+    }
+
+    const description = String(form.description || '');
+    if (description.length > 500) {
+      nextErrors.description = 'Описание слишком длинное (максимум 500 символов)';
     }
 
     if (imageFile && !String(imageFile.type || '').startsWith('image/')) {
       nextErrors.image_file = 'Загрузите файл изображения (image/*)';
     }
+    if (imageFile && imageFile.size > MAX_UPLOAD_MB * 1024 * 1024) {
+      nextErrors.image_file = `Изображение слишком большое (максимум ${MAX_UPLOAD_MB} МБ)`;
+    }
 
     if (videoFile && !String(videoFile.type || '').startsWith('video/')) {
       nextErrors.video_file = 'Загрузите видеофайл (video/*)';
+    }
+    if (videoFile && videoFile.size > MAX_UPLOAD_MB * 1024 * 1024) {
+      nextErrors.video_file = `Видео слишком большое (максимум ${MAX_UPLOAD_MB} МБ)`;
+    }
+
+    if (!imageFile && form.image_url && !MEDIA_URL_RE.test(String(form.image_url).trim())) {
+      nextErrors.image_url = 'Некорректная ссылка на изображение';
+    }
+    if (!videoFile && form.video_url && !MEDIA_URL_RE.test(String(form.video_url).trim())) {
+      nextErrors.video_url = 'Некорректная ссылка на видео';
     }
 
     return nextErrors;
@@ -417,7 +495,7 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
               </Select>
             </Field>
 
-            <Field label="Тренер">
+            <Field label="Тренер" error={errors.coach_name}>
               <Input value={form.coach_name} onChange={(e) => setField('coach_name', e.target.value)} />
             </Field>
 
@@ -525,7 +603,7 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
               </>
             </Field>
 
-            <Field label="Описание">
+            <Field label="Описание" error={errors.description}>
               <Textarea rows={4} value={form.description} onChange={(e) => setField('description', e.target.value)} />
             </Field>
           </div>

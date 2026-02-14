@@ -18,7 +18,7 @@ function normalizeStr(v) {
 // Маппинг на случай, если в БД старые названия
 function normalizeLevelToKey(nameRaw) {
   const n = normalizeStr(nameRaw).toLowerCase().replace(/\s+/g, "");
-  if (!n) return "mid";
+  if (!n) return "novice";
 
   // новые
   if (n.includes("нович")) return "novice";
@@ -37,7 +37,7 @@ function normalizeLevelToKey(nameRaw) {
 
 function normalizeLevelLabel(nameRaw) {
   const n = normalizeStr(nameRaw).toLowerCase().replace(/\s+/g, "");
-  if (!n) return "—";
+  if (!n) return "Новичок";
   if (n.includes("нович")) return "Новичок";
   if (n.includes("средний-") || n.includes("средний−")) return "Средний-";
   if (n === "средний") return "Средний";

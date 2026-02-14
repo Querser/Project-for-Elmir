@@ -94,6 +94,9 @@ const SETTING_FIELDS = [
 
 ];
 
+const SETTING_KEY_RE = /^[a-z0-9][a-z0-9_.:-]{1,119}$/i;
+const PHONE_RE = /^\+?[0-9()\-\s]{6,32}$/;
+
 export default function SettingsPage() {
   const toast = useToast();
 
@@ -168,6 +171,30 @@ export default function SettingsPage() {
   }
 
   async function onSaveAll() {
+    const cancelHours = Number(values.cancel_hours_before_training);
+    if (!Number.isInteger(cancelHours) || cancelHours < 0 || cancelHours > 168) {
+      toast.push('Параметр отмены должен быть целым числом от 0 до 168 часов', 'error');
+      return;
+    }
+
+    const autobanHours = Number(values.autoban_hours_before_training);
+    if (!Number.isInteger(autobanHours) || autobanHours < 0 || autobanHours > 168) {
+      toast.push('Параметр автобана должен быть целым числом от 0 до 168 часов', 'error');
+      return;
+    }
+
+    const paymentsEnabled = String(values.payments_enabled || '').trim().toLowerCase();
+    if (paymentsEnabled !== 'true' && paymentsEnabled !== 'false') {
+      toast.push('Поле "Прием оплат" должно быть true или false', 'error');
+      return;
+    }
+
+    const acquiringPhone = String(values.acquiring_phone_number || '').trim();
+    if (acquiringPhone && !PHONE_RE.test(acquiringPhone)) {
+      toast.push('Номер для оплаты имеет некорректный формат', 'error');
+      return;
+    }
+
     setSaving(true);
     try {
       for (const field of SETTING_FIELDS) {
@@ -186,6 +213,19 @@ export default function SettingsPage() {
     const key = customKey.trim();
     if (!key) {
       toast.push('Укажите ключ настройки', 'error');
+      return;
+    }
+
+    if (!SETTING_KEY_RE.test(key)) {
+      toast.push('Ключ настройки может содержать только буквы, цифры, _ . : - (2-120 символов)', 'error');
+      return;
+    }
+    if (String(customValue || '').length > 5000) {
+      toast.push('Значение слишком длинное (максимум 5000 символов)', 'error');
+      return;
+    }
+    if (String(customDescription || '').length > 2000) {
+      toast.push('Описание слишком длинное (максимум 2000 символов)', 'error');
       return;
     }
 

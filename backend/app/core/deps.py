@@ -30,6 +30,12 @@ try:
 except Exception:
     from app.db.models import User  # type: ignore
 
+try:
+    from app.services.level_service import get_default_level_id  # type: ignore
+except Exception:  # pragma: no cover
+    def get_default_level_id(db):  # type: ignore
+        return None
+
 
 # -----------------------------
 # Admin token imports (stage 13)
@@ -248,16 +254,42 @@ def _get_or_create_user_by_telegram(db: Session, tg: TgWebAppUser) -> User:
     try:
         user = db.execute(select(User).where(User.telegram_id == tg.telegram_id)).scalar_one_or_none()
         if user:
+            changed = False
+
             if tg.username is not None and hasattr(user, "username") and getattr(user, "username", None) != tg.username:
                 user.username = tg.username
+                changed = True
+
+            if tg.first_name is not None and hasattr(user, "first_name") and not getattr(user, "first_name", None):
+                user.first_name = tg.first_name
+                changed = True
+
+            if tg.last_name is not None and hasattr(user, "last_name") and not getattr(user, "last_name", None):
+                user.last_name = tg.last_name
+                changed = True
+
+            if hasattr(user, "level_id") and getattr(user, "level_id", None) is None:
+                default_level_id = get_default_level_id(db)
+                if default_level_id is not None:
+                    user.level_id = int(default_level_id)
+                    changed = True
+
+            if changed:
                 db.add(user)
                 db.commit()
                 db.refresh(user)
             return user
 
+        default_level_id = get_default_level_id(db)
         user = User(telegram_id=tg.telegram_id)
         if hasattr(user, "username"):
             user.username = tg.username
+        if hasattr(user, "first_name"):
+            user.first_name = tg.first_name
+        if hasattr(user, "last_name"):
+            user.last_name = tg.last_name
+        if hasattr(user, "level_id") and default_level_id is not None:
+            user.level_id = int(default_level_id)
 
         db.add(user)
         db.commit()
@@ -292,7 +324,7 @@ def require_telegram_init_data_or_dev_header(request: Request) -> None:
         return
 
     if _dev_mode_enabled():
-        if _get_header(request, "X-Telegram-Id") or _get_header(request, "X-User-Id") or (_get_dev_default_telegram_id() is not None):
+        if _get_header(request, "X-Telegram-Id") or _get_header(request, "X-User-Id"):
             return
 
     raise unauthorized("Пользователь не авторизован через Telegram", required_header="X-Telegram-Init-Data")
@@ -341,10 +373,6 @@ def get_current_user(
                     return user
                 return _get_or_create_user_by_telegram(db, TgWebAppUser(telegram_id=tg_id))
 
-            default_tg_id = _get_dev_default_telegram_id()
-            if default_tg_id is not None:
-                return _get_or_create_user_by_telegram(db, TgWebAppUser(telegram_id=default_tg_id))
-
             raise unauthorized("Unauthorized: provide X-User-Id, X-Telegram-Id or X-Telegram-Init-Data header")
 
         # ---- PROD ветка ----
@@ -366,8 +394,6 @@ def get_current_user_optional(
     tg_id_raw = _get_header(request, "X-Telegram-Id")
 
     if not init_data and not user_id_raw and not tg_id_raw:
-        if _dev_mode_enabled() and (_get_dev_default_telegram_id() is not None):
-            return get_current_user(request=request, db=db)
         return None
 
     return get_current_user(request=request, db=db)

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -308,12 +308,16 @@ def list_public_trainings(
     user: Any | None = Depends(get_current_user_optional),
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=200),
+    date_from: datetime | None = Query(None),
+    date_to: datetime | None = Query(None),
 ):
     now_utc = datetime.now(timezone.utc)
+    effective_date_from = date_from if date_from is not None else now_utc
 
     items, total = list_trainings(
         db,
-        date_from=now_utc,
+        date_from=effective_date_from,
+        date_to=date_to,
         include_cancelled=False,
         order='asc',
         limit=limit,

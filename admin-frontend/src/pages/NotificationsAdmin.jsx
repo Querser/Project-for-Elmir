@@ -15,6 +15,7 @@ const SEND_MODES = [
 ];
 
 const NOTIFICATION_TYPES = ['INFO', 'SYSTEM', 'TRAINING', 'IMPORTANT'];
+const URL_RE = /^https?:\/\/[^\s]+$/i;
 
 export default function NotificationsAdminPage() {
   const toast = useToast();
@@ -87,16 +88,46 @@ export default function NotificationsAdminPage() {
   }
 
   async function onSend() {
-    if (!text.trim()) {
+    const cleanTitle = title.trim() || 'Уведомление';
+    const cleanText = text.trim();
+    const cleanUrl = url.trim();
+
+    if (!cleanText) {
       toast.push('Введите текст уведомления', 'error');
       return;
     }
-    if (mode === 'training' && !trainingId) {
-      toast.push('Укажите ID тренировки', 'error');
+    if (cleanTitle.length > 120) {
+      toast.push('Заголовок слишком длинный (максимум 120 символов)', 'error');
+      return;
+    }
+    if (cleanText.length > 4000) {
+      toast.push('Текст слишком длинный (максимум 4000 символов)', 'error');
+      return;
+    }
+    if (cleanUrl && !URL_RE.test(cleanUrl)) {
+      toast.push('Ссылка должна начинаться с http:// или https://', 'error');
+      return;
+    }
+
+    const trainingIdNum = Number(trainingId);
+    if (mode === 'training' && (!Number.isInteger(trainingIdNum) || trainingIdNum <= 0)) {
+      toast.push('Укажите корректный ID тренировки (целое число > 0)', 'error');
       return;
     }
     if (mode === 'users' && !selectedUserIds.length) {
       toast.push('Выберите хотя бы одного получателя', 'error');
+      return;
+    }
+    if (mode === 'users') {
+      const invalidUserId = selectedUserIds.some((id) => !Number.isInteger(Number(id)) || Number(id) <= 0);
+      if (invalidUserId) {
+        toast.push('В списке получателей есть некорректный ID пользователя', 'error');
+        return;
+      }
+    }
+
+    if (!NOTIFICATION_TYPES.includes(type)) {
+      toast.push('Выберите корректный тип уведомления', 'error');
       return;
     }
 
@@ -106,18 +137,18 @@ export default function NotificationsAdminPage() {
         await apiFetchJson('/admin/notifications/broadcast', {
           method: 'POST',
           auth: true,
-          body: { type, title: title.trim() || 'Уведомление', text: text.trim(), url: url.trim() || null },
+          body: { type, title: cleanTitle, text: cleanText, url: cleanUrl || null },
         });
       } else if (mode === 'training') {
         await apiFetchJson('/admin/notifications/training', {
           method: 'POST',
           auth: true,
           body: {
-            training_id: Number(trainingId),
+            training_id: trainingIdNum,
             type,
-            title: title.trim() || 'Уведомление',
-            text: text.trim(),
-            url: url.trim() || null,
+            title: cleanTitle,
+            text: cleanText,
+            url: cleanUrl || null,
           },
         });
       } else {
@@ -127,9 +158,9 @@ export default function NotificationsAdminPage() {
           body: {
             user_ids: selectedUserIds,
             type,
-            title: title.trim() || 'Уведомление',
-            text: text.trim(),
-            url: url.trim() || null,
+            title: cleanTitle,
+            text: cleanText,
+            url: cleanUrl || null,
           },
         });
       }
