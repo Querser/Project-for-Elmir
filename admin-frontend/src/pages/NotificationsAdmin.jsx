@@ -131,6 +131,7 @@ export default function NotificationsAdminPage() {
   const editorRef = useRef(null);
 
   const [recipientQuery, setRecipientQuery] = useState('');
+  const [recipientUserId, setRecipientUserId] = useState('');
   const [recipientBusy, setRecipientBusy] = useState(false);
   const [recipientResults, setRecipientResults] = useState([]);
   const [selectedUserIds, setSelectedUserIds] = useState([]);
@@ -170,7 +171,11 @@ export default function NotificationsAdminPage() {
   }
 
   async function searchRecipients() {
-    if (!recipientQuery.trim()) {
+    const query = recipientQuery.trim();
+    const userIdQuery = recipientUserId.trim();
+    const hasUserIdQuery = /^\d+$/.test(userIdQuery);
+
+    if (!query && !hasUserIdQuery) {
       setRecipientResults([]);
       return;
     }
@@ -178,7 +183,8 @@ export default function NotificationsAdminPage() {
     setRecipientBusy(true);
     try {
       const params = new URLSearchParams();
-      params.set('q', recipientQuery.trim());
+      if (query) params.set('q', query);
+      if (hasUserIdQuery) params.set('user_id', userIdQuery);
       params.set('limit', '30');
       params.set('offset', '0');
       const res = await apiFetchJson(`/admin/users?${params.toString()}`, { auth: true });
@@ -204,6 +210,7 @@ export default function NotificationsAdminPage() {
     setUrl('');
     setTrainingId('');
     setRecipientQuery('');
+    setRecipientUserId('');
     setRecipientResults([]);
     setSelectedUserIds([]);
   }
@@ -454,12 +461,19 @@ export default function NotificationsAdminPage() {
 
         {mode === 'users' ? (
           <div className="target-users">
-            <div className="grid-2">
+            <div className="grid-3">
               <Field label="Поиск получателей">
                 <Input
                   value={recipientQuery}
                   onChange={(e) => setRecipientQuery(e.target.value)}
                   placeholder="Имя, username, телефон"
+                />
+              </Field>
+              <Field label="ID получателя">
+                <Input
+                  value={recipientUserId}
+                  onChange={(e) => setRecipientUserId(e.target.value)}
+                  placeholder="Например: 123"
                 />
               </Field>
               <div className="field">
