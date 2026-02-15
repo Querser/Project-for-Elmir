@@ -4,7 +4,7 @@ import Card from '../components/Card.jsx';
 import Button from '../components/Button.jsx';
 import Spinner from '../components/Spinner.jsx';
 import { Field, Input, Select, Textarea } from '../components/Field.jsx';
-import { apiFetchJson } from '../lib/api.js';
+import { apiDownloadFile, apiFetchJson } from '../lib/api.js';
 import { fromDatetimeLocalValue, toDatetimeLocalValue } from '../lib/format.js';
 import { navigate } from '../lib/router.js';
 import { useToast } from '../components/Toast.jsx';
@@ -109,6 +109,7 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
   const isEdit = mode === 'edit';
 
   const [busy, setBusy] = useState(false);
+  const [exportBusy, setExportBusy] = useState(false);
   const [loading, setLoading] = useState(Boolean(isEdit));
 
   const [form, setForm] = useState({
@@ -407,6 +408,22 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
     }
   }
 
+  async function onExportParticipants() {
+    if (!isEdit || !trainingId || exportBusy) return;
+    setExportBusy(true);
+    try {
+      await apiDownloadFile(`/trainings/${trainingId}/participants.xlsx`, {
+        auth: true,
+        filenameFallback: `training-${trainingId}-participants.xlsx`,
+      });
+      toast.push('Список участников выгружен', 'success');
+    } catch (e) {
+      toast.push(e?.message || 'Не удалось выгрузить список участников', 'error');
+    } finally {
+      setExportBusy(false);
+    }
+  }
+
   return (
     <AdminLayout
       title={isEdit ? `Редактирование #${trainingId}` : 'Создание тренировки'}
@@ -414,6 +431,15 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
       actions={(
         <>
           <Button variant="secondary" onClick={() => navigate('/trainings')} disabled={busy}>Назад</Button>
+          {isEdit ? (
+            <Button variant="secondary" onClick={onExportParticipants} disabled={busy || loading || exportBusy}>
+              {exportBusy ? (
+                <span className="inline-flex items-center gap-8"><Spinner size={16} /> Выгружаем</span>
+              ) : (
+                'Список участников (Excel)'
+              )}
+            </Button>
+          ) : null}
           <Button onClick={onSave} disabled={!canSave}>
             {busy ? (
               <span className="inline-flex items-center gap-8"><Spinner size={16} /> Сохраняем</span>

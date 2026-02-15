@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.models.ban import Ban
 from app.models.debt import Debt, DebtStatus
+from app.models.enrollment import Enrollment, EnrollmentStatus
 from app.models.payment import Payment, PaymentStatus
 from app.models.training import Training
 from app.models.user import User
@@ -228,3 +229,49 @@ def build_payments_export_last_quarter_xlsx(db: Session) -> tuple[bytes, int]:
 
     _auto_fit_columns(ws)
     return _workbook_to_bytes(wb), deleted
+
+
+def build_training_participants_export_xlsx(db: Session, *, training_id: int) -> tuple[bytes, int]:
+    training = db.query(Training).filter(Training.id == training_id).first()
+    if training is None:
+        raise ValueError("training_not_found")
+
+    rows = (
+        db.query(User, Enrollment)
+        .join(Enrollment, Enrollment.user_id == User.id)
+        .filter(Enrollment.training_id == training_id)
+        .filter(Enrollment.status.in_([EnrollmentStatus.ACTIVE, EnrollmentStatus.RESERVE]))
+        .order_by(Enrollment.is_reserve.asc(), User.last_name.asc(), User.first_name.asc(), User.id.asc())
+        .all()
+    )
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Participants"
+
+    headers = [
+        "phone",
+        "first_name",
+        "last_name",
+        "telegram_username",
+        "id",
+        "telegram_id",
+    ]
+    ws.append(headers)
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+
+    for user, _enrollment in rows:
+        ws.append(
+            [
+                user.phone or "",
+                user.first_name or "",
+                user.last_name or "",
+                user.username or "",
+                int(user.id),
+                int(user.telegram_id) if user.telegram_id is not None else "",
+            ]
+        )
+
+    _auto_fit_columns(ws)
+    return _workbook_to_bytes(wb), len(rows)

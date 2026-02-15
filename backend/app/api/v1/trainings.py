@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from io import BytesIO
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -7,12 +8,15 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_admin_user_any, get_current_user_optional, get_db
 from app.core.exceptions import AppException
 from app.schemas.training import TrainingCreate, TrainingUpdate
 from app.schemas.training_ui import TrainingReadUI, TrainingsPageUI
+from app.services.admin_export_service import build_training_participants_export_xlsx
+from app.services.audit_log_service import write_audit_log
 from app.services.training_service import (
     cancel_training,
     create_training,
@@ -159,6 +163,33 @@ def _safe_extension(upload: UploadFile) -> str:
     return '.bin'
 
 
+def _xlsx_response(content: bytes, filename: str) -> StreamingResponse:
+    return StreamingResponse(
+        BytesIO(content),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+def _actor_payload(actor: Any) -> tuple[int | None, str]:
+    actor_id = None
+    if hasattr(actor, "id"):
+        try:
+            actor_id = int(getattr(actor, "id"))
+        except Exception:
+            actor_id = None
+
+    actor_name = (
+        getattr(actor, "username", None)
+        or getattr(actor, "first_name", None)
+        or "admin"
+    )
+    return actor_id, str(actor_name)
+
+
 @router.get('/admin', response_model=TrainingsPageUI)
 def list_admin_trainings(
     request: Request,
@@ -299,6 +330,36 @@ def restore_training_admin(
     training = get_training_or_404(db=db, training_id=training_id)
     restored = restore_training(db=db, training=training)
     return _to_training_read_ui_payload(db, restored, None, request=request, include_participants=True)
+
+
+@router.get('/{training_id}/participants.xlsx')
+def export_training_participants_admin(
+    training_id: int,
+    db: Session = Depends(get_db),
+    admin_actor: Any = Depends(get_current_admin_user_any),
+):
+    try:
+        content, participants_count = build_training_participants_export_xlsx(db, training_id=training_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Training not found")
+
+    actor_id, actor_name = _actor_payload(admin_actor)
+    write_audit_log(
+        db,
+        user_id=actor_id,
+        action="ADMIN_EXPORT_TRAINING_PARTICIPANTS_XLSX",
+        entity="training",
+        entity_id=training_id,
+        data={
+            "actor": actor_name,
+            "training_id": int(training_id),
+            "participants_count": int(participants_count),
+            "format": "xlsx",
+        },
+    )
+
+    filename = f"training-{training_id}-participants-{datetime.utcnow():%Y%m%d-%H%M%S}.xlsx"
+    return _xlsx_response(content, filename)
 
 
 @router.get('', response_model=TrainingsPageUI)
