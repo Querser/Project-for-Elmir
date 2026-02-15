@@ -4,7 +4,7 @@ import Card from '../components/Card.jsx';
 import Button from '../components/Button.jsx';
 import Spinner from '../components/Spinner.jsx';
 import Modal from '../components/Modal.jsx';
-import { Field, Input, Select } from '../components/Field.jsx';
+import { Field, Input, Select, Textarea } from '../components/Field.jsx';
 import { apiFetchJson } from '../lib/api.js';
 import { navigate } from '../lib/router.js';
 import { formatDate, formatDateTime, formatMoney, toIsoFromDatetimeLocal } from '../lib/format.js';
@@ -113,6 +113,15 @@ function sanitizeHtml(html) {
   return root.innerHTML;
 }
 
+function isBanActiveNow(ban, nowTs = Date.now()) {
+  if (!ban || !ban.active) return false;
+  const untilRaw = ban.until;
+  if (!untilRaw) return true;
+  const untilTs = new Date(untilRaw).getTime();
+  if (!Number.isFinite(untilTs)) return false;
+  return untilTs >= nowTs;
+}
+
 export default function PlayerDetailsPage({ userId }) {
   const toast = useToast();
 
@@ -133,10 +142,12 @@ export default function PlayerDetailsPage({ userId }) {
   const [notifyUrl, setNotifyUrl] = useState('');
   const editorRef = useRef(null);
 
-  const activeBan = useMemo(
-    () => (user?.bans || []).find((b) => Boolean(b.active)) || null,
-    [user]
-  );
+  const activeBan = useMemo(() => {
+    const bans = Array.isArray(user?.bans) ? user.bans : [];
+    const nowTs = Date.now();
+    return bans.find((b) => isBanActiveNow(b, nowTs)) || null;
+  }, [user]);
+  const hasActiveBan = Boolean(user?.has_active_ban) || Boolean(activeBan);
   const notifyTextPlain = useMemo(() => extractPlainText(notifyText), [notifyText]);
 
   function syncNotificationEditorValue() {
@@ -382,7 +393,7 @@ export default function PlayerDetailsPage({ userId }) {
               </div>
               <div>
                 <span className="muted">Статус:</span>{' '}
-                {user.has_active_ban ? <span className="badge badge-danger">В бане</span> : <span className="badge">Активен</span>}
+                {hasActiveBan ? <span className="badge badge-danger">В бане</span> : <span className="badge">Активен</span>}
               </div>
             </div>
           </Card>
@@ -426,7 +437,7 @@ export default function PlayerDetailsPage({ userId }) {
               <Button variant="secondary" onClick={onUnban} disabled={actionBusy === 'unban'}>
                 {actionBusy === 'unban' ? 'Снимаем...' : 'Снять бан'}
               </Button>
-              {user.has_active_ban ? (
+              {hasActiveBan ? (
                 <Button
                   variant="secondary"
                   onClick={onCancelBannedEnrollments}
@@ -440,8 +451,8 @@ export default function PlayerDetailsPage({ userId }) {
             </div>
 
             <div className="muted" style={{ marginTop: 10 }}>
-              {activeBan
-                ? `Активный бан: ${activeBan.reason} ${activeBan.until ? `(до ${formatDateTime(activeBan.until)})` : '(без срока)'}` 
+              {hasActiveBan
+                ? `Активный бан: ${activeBan?.reason || 'Причина не указана'} ${activeBan?.until ? `(до ${formatDateTime(activeBan.until)})` : '(без срока)'}` 
                 : 'Активного бана нет'}
             </div>
             <div className="section-title" style={{ marginTop: 18 }}>Персональное уведомление</div>

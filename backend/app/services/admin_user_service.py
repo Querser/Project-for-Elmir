@@ -24,6 +24,24 @@ def _active_ban_filter(now: datetime):
     )
 
 
+def _ban_is_active_now(ban: Ban, now: datetime) -> bool:
+    if not bool(getattr(ban, "active", False)):
+        return False
+
+    until = getattr(ban, "until", None)
+    if until is None:
+        return True
+
+    try:
+        return until >= now
+    except TypeError:
+        # Defensive handling for mixed naive/aware datetimes in historical rows.
+        try:
+            return until.replace(tzinfo=None) >= now.replace(tzinfo=None)
+        except Exception:
+            return False
+
+
 def _user_to_list_item(user: User, open_debts_count: int, has_active_ban: bool) -> dict:
     return {
         "id": user.id,
@@ -203,7 +221,7 @@ def get_admin_user_details(db: Session, *, user_id: int) -> dict | None:
                 "id": b.id,
                 "type": b.type.value if hasattr(b.type, "value") else str(b.type),
                 "reason": b.reason,
-                "active": bool(b.active),
+                "active": _ban_is_active_now(b, now),
                 "created_at": b.created_at,
                 "until": b.until,
             }

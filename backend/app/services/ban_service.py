@@ -18,15 +18,37 @@ def _active_until_filter(now: datetime):
     return (Ban.active.is_(True)) & (or_(Ban.until.is_(None), Ban.until >= now))
 
 
+def _is_ban_active_now(ban: Ban, now: datetime) -> bool:
+    if not bool(getattr(ban, "active", False)):
+        return False
+
+    until = getattr(ban, "until", None)
+    if until is None:
+        return True
+
+    try:
+        return until >= now
+    except TypeError:
+        # Defensive path for legacy rows with mixed naive/aware timestamps.
+        try:
+            return until.replace(tzinfo=None) >= now.replace(tzinfo=None)
+        except Exception:
+            return False
+
+
 def get_active_ban(db: Session, user_id: int) -> Ban | None:
     now = _now_utc()
-    return (
+    bans = (
         db.query(Ban)
         .filter(Ban.user_id == user_id)
-        .filter(_active_until_filter(now))
+        .filter(Ban.active.is_(True))
         .order_by(Ban.created_at.desc(), Ban.id.desc())
-        .first()
+        .all()
     )
+    for ban in bans:
+        if _is_ban_active_now(ban, now):
+            return ban
+    return None
 
 
 def has_active_ban(db: Session, user_id: int) -> bool:
@@ -156,12 +178,13 @@ def deactivate_auto_debt_bans_if_any(db: Session, *, user_id: int) -> int:
     Возвращает количество снятых банов.
     """
     now = _now_utc()
-    bans = (
+    candidates = (
         db.query(Ban)
         .filter(Ban.user_id == user_id, Ban.type == BanType.AUTO_DEBT)
-        .filter(_active_until_filter(now))
+        .filter(Ban.active.is_(True))
         .all()
     )
+    bans = [b for b in candidates if _is_ban_active_now(b, now)]
 
     for b in bans:
         b.active = False
@@ -180,12 +203,13 @@ def manual_unban_user(db: Session, *, user_id: int) -> int:
     Снимает ТОЛЬКО MANUAL баны.
     """
     now = _now_utc()
-    bans = (
+    candidates = (
         db.query(Ban)
         .filter(Ban.user_id == user_id, Ban.type == BanType.MANUAL)
-        .filter(_active_until_filter(now))
+        .filter(Ban.active.is_(True))
         .all()
     )
+    bans = [b for b in candidates if _is_ban_active_now(b, now)]
 
     for b in bans:
         b.active = False
@@ -220,12 +244,13 @@ def unban_user(db: Session, *, user_id: int) -> int:
     Снимает ВСЕ активные баны (и MANUAL, и AUTO_DEBT).
     """
     now = _now_utc()
-    bans = (
+    candidates = (
         db.query(Ban)
         .filter(Ban.user_id == user_id)
-        .filter(_active_until_filter(now))
+        .filter(Ban.active.is_(True))
         .all()
     )
+    bans = [b for b in candidates if _is_ban_active_now(b, now)]
 
     for b in bans:
         b.active = False
