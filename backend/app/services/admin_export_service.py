@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.models.ban import Ban
 from app.models.debt import Debt, DebtStatus
-from app.models.enrollment import Enrollment, EnrollmentStatus
+from app.models.enrollment import Enrollment
 from app.models.payment import Payment, PaymentStatus
 from app.models.training import Training
 from app.models.user import User
@@ -236,13 +236,43 @@ def build_training_participants_export_xlsx(db: Session, *, training_id: int) ->
     if training is None:
         raise ValueError("training_not_found")
 
-    rows = (
+    raw_rows = (
         db.query(User, Enrollment)
         .join(Enrollment, Enrollment.user_id == User.id)
         .filter(Enrollment.training_id == training_id)
-        .filter(Enrollment.status.in_([EnrollmentStatus.ACTIVE, EnrollmentStatus.RESERVE]))
-        .order_by(Enrollment.is_reserve.asc(), User.last_name.asc(), User.first_name.asc(), User.id.asc())
         .all()
+    )
+
+    def _status_text(value: object) -> str:
+        raw = getattr(value, "value", value)
+        text = str(raw or "").strip().lower()
+        if "." in text:
+            text = text.rsplit(".", 1)[-1]
+        return text
+
+    def _is_participant_status(enrollment: Enrollment) -> bool:
+        text = _status_text(getattr(enrollment, "status", None))
+        if text in {"active", "enrolled", "confirmed", "reserve", "waitlist", "standby"}:
+            return True
+        if text in {"cancelled", "canceled", "cancelled_late", "canceled_late", "no_show"}:
+            return False
+        # Legacy fallback when status value is non-standard but reserve/main flag exists.
+        return bool(getattr(enrollment, "is_reserve", False))
+
+    def _is_reserve(enrollment: Enrollment) -> bool:
+        text = _status_text(getattr(enrollment, "status", None))
+        if text in {"reserve", "waitlist", "standby"}:
+            return True
+        return bool(getattr(enrollment, "is_reserve", False))
+
+    rows = [(user, enrollment) for user, enrollment in raw_rows if _is_participant_status(enrollment)]
+    rows.sort(
+        key=lambda pair: (
+            _is_reserve(pair[1]),
+            (pair[0].last_name or "").lower(),
+            (pair[0].first_name or "").lower(),
+            int(pair[0].id),
+        )
     )
 
     wb = Workbook()
