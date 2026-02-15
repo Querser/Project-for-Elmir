@@ -181,10 +181,10 @@ def _get_cancel_hours_before_training(db: Session) -> int:
     return max(0, min(value, 168))
 
 
-def _coerce_dt_to_reference_tz(dt: datetime, reference: datetime) -> datetime:
-    if reference.tzinfo is None and dt.tzinfo is not None:
+def _coerce_dt_to_training_tz(dt: datetime, training_dt: datetime) -> datetime:
+    if training_dt.tzinfo is None and dt.tzinfo is not None:
         return dt.replace(tzinfo=None)
-    if reference.tzinfo is not None and dt.tzinfo is None:
+    if training_dt.tzinfo is not None and dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt
 
@@ -202,7 +202,7 @@ def _refund_allowed_by_enrollment_time(
     if not isinstance(enrolled_at, datetime):
         return False
 
-    enroll_time = _coerce_dt_to_reference_tz(enrolled_at, cancel_deadline)
+    enroll_time = _coerce_dt_to_training_tz(enrolled_at, cancel_deadline)
     refund_cutoff = cancel_deadline - timedelta(hours=cancel_hours)
     return enroll_time <= refund_cutoff
 

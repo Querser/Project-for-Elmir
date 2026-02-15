@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime
+from io import BytesIO
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -18,6 +20,10 @@ from app.services.admin_user_service import (
     mark_debt_paid_offline,
     set_user_level,
 )
+from app.services.admin_export_service import (
+    build_payments_export_last_quarter_xlsx,
+    build_users_export_xlsx,
+)
 from app.services.ban_service import manual_ban_user, unban_user
 
 router = APIRouter(prefix="/admin/users", tags=["admin-users"])
@@ -26,6 +32,21 @@ router = APIRouter(prefix="/admin/users", tags=["admin-users"])
 class AdminBanRequest(BaseModel):
     reason: str = Field(..., min_length=1, max_length=500)
     until: datetime | None = None
+
+
+def _xlsx_response(content: bytes, filename: str, *, extra_headers: dict[str, str] | None = None) -> StreamingResponse:
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "Cache-Control": "no-store",
+    }
+    if extra_headers:
+        headers.update(extra_headers)
+
+    return StreamingResponse(
+        BytesIO(content),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers=headers,
+    )
 
 
 def _actor_payload(actor: Any) -> tuple[int | None, str]:
@@ -42,6 +63,53 @@ def _actor_payload(actor: Any) -> tuple[int | None, str]:
         or "admin"
     )
     return actor_id, str(actor_name)
+
+
+@router.get("/export/users.xlsx")
+def export_users_admin(
+    db: Session = Depends(get_db),
+    admin_actor: Any = Depends(get_current_admin_user_any),
+):
+    content = build_users_export_xlsx(db)
+    actor_id, actor_name = _actor_payload(admin_actor)
+    write_audit_log(
+        db,
+        user_id=actor_id,
+        action="ADMIN_EXPORT_USERS_XLSX",
+        entity="user",
+        entity_id=None,
+        data={"actor": actor_name, "format": "xlsx"},
+    )
+    filename = f"users-export-{datetime.utcnow():%Y%m%d-%H%M%S}.xlsx"
+    return _xlsx_response(content, filename)
+
+
+@router.get("/export/payments.xlsx")
+def export_payments_admin(
+    db: Session = Depends(get_db),
+    admin_actor: Any = Depends(get_current_admin_user_any),
+):
+    content, deleted_old = build_payments_export_last_quarter_xlsx(db)
+    actor_id, actor_name = _actor_payload(admin_actor)
+    write_audit_log(
+        db,
+        user_id=actor_id,
+        action="ADMIN_EXPORT_PAYMENTS_XLSX",
+        entity="payment",
+        entity_id=None,
+        data={
+            "actor": actor_name,
+            "format": "xlsx",
+            "period": "last_quarter",
+            "deleted_old_records": int(deleted_old or 0),
+        },
+    )
+    filename = f"payments-last-quarter-{datetime.utcnow():%Y%m%d-%H%M%S}.xlsx"
+    return _xlsx_response(
+        content,
+        filename,
+        extra_headers={"X-Purged-Payments": str(int(deleted_old or 0))},
+    )
 
 
 @router.get("", response_model=dict)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -16,6 +17,7 @@ from app.models.enrollment import Enrollment
 from app.models.payment import Payment, PaymentStatus
 from app.models.user import User
 from app.services.enrollment_service import enroll_user_to_training
+from app.services.payment_retention_service import purge_payments_older_than_quarter
 from app.services.training_service import get_training_or_404
 from app.services.training_ui_service import build_training_ui_payload
 from app.services.yookassa_service import (
@@ -26,12 +28,22 @@ from app.services.yookassa_service import (
 )
 
 router = APIRouter(prefix="/payments", tags=["payments"])
+logger = logging.getLogger(__name__)
 
 
 class EnrollmentCheckoutRequest(BaseModel):
     training_id: int
     price_tier_id: int | None = None
     return_url: str | None = Field(default=None, max_length=2000)
+
+
+def _run_payments_retention_cleanup(db: Session) -> None:
+    try:
+        deleted = purge_payments_older_than_quarter(db)
+        if deleted:
+            logger.info("Payments retention cleanup removed %s old rows", deleted)
+    except Exception:
+        logger.exception("Payments retention cleanup failed")
 
 
 def _safe_int(value: Any) -> int | None:
@@ -178,6 +190,8 @@ def create_enrollment_checkout(
     if not payments_enabled(db):
         raise AppException.conflict(message="Прием оплат временно отключен")
 
+    _run_payments_retention_cleanup(db)
+
     checkout = _resolve_checkout_context(db, user=user, training_id=payload.training_id)
     training = checkout["training"]
     amount: Decimal = checkout["amount"]
@@ -258,6 +272,8 @@ def get_enrollment_payment_status(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    _run_payments_retention_cleanup(db)
+
     payment_id = str(provider_payment_id or "").strip()
     if not payment_id:
         raise AppException.validation(message="Некорректный payment_id")
@@ -354,4 +370,3 @@ def get_enrollment_payment_status(
             "enrollment": enrollment_payload,
         }
     )
-

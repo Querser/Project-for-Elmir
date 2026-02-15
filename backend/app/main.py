@@ -17,7 +17,8 @@ from app.core.exceptions import setup_exception_handlers
 from app.core.logger import configure_logging
 from app.core.middleware import RequestLoggingMiddleware, TelegramAuthMiddleware
 
-from app.db.session import engine  # sync engine
+from app.db.session import SessionLocal, engine  # sync engine
+from app.services.payment_retention_service import purge_payments_older_than_quarter
 
 settings = get_settings()
 configure_logging()
@@ -107,6 +108,23 @@ def _run_migrations() -> None:
             logger.info("DB bootstrap: advisory lock released %s", lock_key)
 
 
+def _run_payments_retention_cleanup() -> None:
+    try:
+        db = SessionLocal()
+        try:
+            deleted = purge_payments_older_than_quarter(db)
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("Payments retention cleanup failed")
+        return
+
+    if deleted:
+        logger.info("Payments retention: deleted %s rows older than one quarter", deleted)
+    else:
+        logger.info("Payments retention: no outdated payment rows found")
+
+
 app = FastAPI(
     title="Volleyball MiniApp API",
     version="0.1.0",
@@ -123,6 +141,7 @@ app.mount("/media", StaticFiles(directory=str(media_root)), name="media")
 @app.on_event("startup")
 def _startup() -> None:
     _run_migrations()
+    _run_payments_retention_cleanup()
 
 
 app.add_middleware(

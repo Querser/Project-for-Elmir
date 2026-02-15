@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
+﻿import { useEffect, useMemo, useState } from 'react';
 import AdminLayout from '../components/AdminLayout.jsx';
 import Card from '../components/Card.jsx';
 import Button from '../components/Button.jsx';
 import Spinner from '../components/Spinner.jsx';
 import { Field, Input, Select } from '../components/Field.jsx';
-import { apiFetchJson } from '../lib/api.js';
+import { apiDownloadFile, apiFetchJson } from '../lib/api.js';
 import { navigate } from '../lib/router.js';
 import { useToast } from '../components/Toast.jsx';
 
@@ -23,6 +23,8 @@ export default function PlayersPage() {
   const [limit, setLimit] = useState(25);
   const [offset, setOffset] = useState(0);
   const [busy, setBusy] = useState(false);
+  const [exportUsersBusy, setExportUsersBusy] = useState(false);
+  const [exportPaymentsBusy, setExportPaymentsBusy] = useState(false);
 
   const page = useMemo(() => Math.floor(offset / limit) + 1, [offset, limit]);
   const pages = useMemo(() => Math.max(1, Math.ceil(total / limit)), [total, limit]);
@@ -32,7 +34,7 @@ export default function PlayersPage() {
       const res = await apiFetchJson('/levels', { auth: true });
       setLevels(res?.items || []);
     } catch {
-      // Не блокируем работу экрана при недоступности справочника
+      // Не блокируем экран, если справочник уровней временно недоступен.
     }
   }
 
@@ -59,6 +61,38 @@ export default function PlayersPage() {
     }
   }
 
+  async function exportUsers() {
+    if (exportUsersBusy) return;
+    setExportUsersBusy(true);
+    try {
+      await apiDownloadFile('/admin/users/export/users.xlsx', {
+        auth: true,
+        filenameFallback: `users-export-${new Date().toISOString().slice(0, 10)}.xlsx`,
+      });
+      toast.push('Файл с игроками сформирован', 'success');
+    } catch (e) {
+      toast.push(e?.message || 'Ошибка выгрузки игроков', 'error');
+    } finally {
+      setExportUsersBusy(false);
+    }
+  }
+
+  async function exportPayments() {
+    if (exportPaymentsBusy) return;
+    setExportPaymentsBusy(true);
+    try {
+      await apiDownloadFile('/admin/users/export/payments.xlsx', {
+        auth: true,
+        filenameFallback: `payments-last-quarter-${new Date().toISOString().slice(0, 10)}.xlsx`,
+      });
+      toast.push('Файл с платежами за последний квартал сформирован', 'success');
+    } catch (e) {
+      toast.push(e?.message || 'Ошибка выгрузки платежей', 'error');
+    } finally {
+      setExportPaymentsBusy(false);
+    }
+  }
+
   useEffect(() => {
     loadLevels();
   }, []);
@@ -73,15 +107,35 @@ export default function PlayersPage() {
       title="Игроки"
       subtitle="Пользователи, уровень, долги и баны"
       actions={(
-        <Button variant="secondary" onClick={loadUsers} disabled={busy}>
-          {busy ? (
-            <span className="inline-flex items-center gap-8">
-              <Spinner size={16} /> Загрузка
-            </span>
-          ) : (
-            'Обновить'
-          )}
-        </Button>
+        <>
+          <Button variant="secondary" onClick={exportUsers} disabled={busy || exportUsersBusy}>
+            {exportUsersBusy ? (
+              <span className="inline-flex items-center gap-8">
+                <Spinner size={16} /> Выгрузка игроков
+              </span>
+            ) : (
+              'Экспорт игроков (Excel)'
+            )}
+          </Button>
+          <Button variant="secondary" onClick={exportPayments} disabled={busy || exportPaymentsBusy}>
+            {exportPaymentsBusy ? (
+              <span className="inline-flex items-center gap-8">
+                <Spinner size={16} /> Выгрузка платежей
+              </span>
+            ) : (
+              'Экспорт платежей (квартал)'
+            )}
+          </Button>
+          <Button variant="secondary" onClick={loadUsers} disabled={busy}>
+            {busy ? (
+              <span className="inline-flex items-center gap-8">
+                <Spinner size={16} /> Загрузка
+              </span>
+            ) : (
+              'Обновить'
+            )}
+          </Button>
+        </>
       )}
     >
       <Card className="filters">
@@ -89,7 +143,10 @@ export default function PlayersPage() {
           <Field label="Поиск">
             <Input
               value={q}
-              onChange={(e) => { setOffset(0); setQ(e.target.value); }}
+              onChange={(e) => {
+                setOffset(0);
+                setQ(e.target.value);
+              }}
               placeholder="Имя, username, телефон, telegram_id"
             />
           </Field>
@@ -97,22 +154,39 @@ export default function PlayersPage() {
           <Field label="Поиск по ID">
             <Input
               value={userIdFilter}
-              onChange={(e) => { setOffset(0); setUserIdFilter(e.target.value); }}
+              onChange={(e) => {
+                setOffset(0);
+                setUserIdFilter(e.target.value);
+              }}
               placeholder="Например: 123"
             />
           </Field>
 
           <Field label="Уровень">
-            <Select value={levelId} onChange={(e) => { setOffset(0); setLevelId(e.target.value); }}>
+            <Select
+              value={levelId}
+              onChange={(e) => {
+                setOffset(0);
+                setLevelId(e.target.value);
+              }}
+            >
               <option value="">Все</option>
               {levels.map((l) => (
-                <option key={l.id} value={String(l.id)}>{l.name || `#${l.id}`}</option>
+                <option key={l.id} value={String(l.id)}>
+                  {l.name || `#${l.id}`}
+                </option>
               ))}
             </Select>
           </Field>
 
           <Field label="Бан">
-            <Select value={banFilter} onChange={(e) => { setOffset(0); setBanFilter(e.target.value); }}>
+            <Select
+              value={banFilter}
+              onChange={(e) => {
+                setOffset(0);
+                setBanFilter(e.target.value);
+              }}
+            >
               <option value="">Все</option>
               <option value="banned">Только в бане</option>
               <option value="not_banned">Только без бана</option>
@@ -120,7 +194,13 @@ export default function PlayersPage() {
           </Field>
 
           <Field label="Лимит на странице">
-            <Select value={String(limit)} onChange={(e) => { setOffset(0); setLimit(Number(e.target.value)); }}>
+            <Select
+              value={String(limit)}
+              onChange={(e) => {
+                setOffset(0);
+                setLimit(Number(e.target.value));
+              }}
+            >
               <option value="10">10</option>
               <option value="25">25</option>
               <option value="50">50</option>
@@ -148,8 +228,12 @@ export default function PlayersPage() {
                 </div>
 
                 <div className="row-meta">
-                  <span>Уровень: <b>{user.level_name || 'Не назначен'}</b></span>
-                  <span>Открытых долгов: <b>{Number(user.open_debts_count || 0)}</b></span>
+                  <span>
+                    Уровень: <b>{user.level_name || 'Не назначен'}</b>
+                  </span>
+                  <span>
+                    Открытых долгов: <b>{Number(user.open_debts_count || 0)}</b>
+                  </span>
                 </div>
               </div>
 

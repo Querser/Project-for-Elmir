@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { apiFetch, extractItems } from "../api";
 import RefreshButton from "../components/RefreshButton";
 
-// Уровни строго по ТЗ
+// Канонические вкладки уровней рейтинга
 const LEVEL_TABS = [
   { key: "novice", label: "Новичок", emoji: "🥉" },
   { key: "mid_minus", label: "Средний-", emoji: "🥈" },
@@ -214,7 +214,7 @@ export default function Rating() {
     });
   }, [ratings, levelsById]);
 
-  // ВАЖНО: place считаем ВНУТРИ уровня (как на референсах)
+  // Место считаем внутри текущего уровня
   const filtered = useMemo(() => {
     const list = prepared.filter((p) => p.levelKey === activeTab);
     list.sort((a, b) => {

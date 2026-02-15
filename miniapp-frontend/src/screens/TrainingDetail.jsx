@@ -1131,7 +1131,7 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
             <div className="modal-body">
               <p>Вы уверены, что хотите отменить запись?</p>
               <p className="hint" style={{ marginTop: 10 }}>
-                По ТЗ отмена возможна не позднее, чем за 2 часа до начала.
+                Отмена доступна только до установленного времени перед началом тренировки.
               </p>
             </div>
             <div className="modal-actions">

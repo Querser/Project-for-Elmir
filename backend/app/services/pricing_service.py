@@ -93,7 +93,7 @@ def validate_price_tiers_input(db: Session, tiers: list[dict]) -> None:
         if min_id is not None and max_id is not None and min_id > max_id:
             raise ValueError(f"Invalid tier range: min_level_id({min_id}) > max_level_id({max_id})")
 
-    # Check referenced levels exist (only if level_id provided)
+    # Check selected levels exist (only if level_id provided)
     level_ids = {x for t in tiers for x in (t.get("min_level_id"), t.get("max_level_id")) if x is not None}
     if level_ids:
         existing = set(

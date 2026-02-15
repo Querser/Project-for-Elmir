@@ -1,4 +1,4 @@
-"""levels: привести к ТЗ + заполнить sort_order (fix NOT NULL)
+"""levels: нормализовать уровни и заполнить sort_order (fix NOT NULL)
 
 Revision ID: 20260127_levels_tz_sort_order
 Revises: REPLACE_WITH_DB_HEAD
@@ -52,7 +52,7 @@ def upgrade() -> None:
     if not _col_exists(insp, "levels", "sort_order"):
         op.add_column("levels", sa.Column("sort_order", sa.Integer(), nullable=True))
 
-    # 1) upsert 4 уровня по ТЗ без ON CONFLICT (чтобы не зависеть от уникальных индексов)
+    # 1) upsert 4 канонических уровней без ON CONFLICT (чтобы не зависеть от уникальных индексов)
     for name, order in LEVELS:
         bind.execute(
             text("UPDATE levels SET sort_order = :order WHERE name = :name"),

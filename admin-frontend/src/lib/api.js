@@ -316,4 +316,82 @@ export async function apiFetchJson(
   return unwrapPayload(payload);
 }
 
+function parseFilenameFromDisposition(disposition) {
+  const raw = String(disposition || '');
+  if (!raw) return '';
+
+  const utf8Match = raw.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1].trim().replace(/^"(.*)"$/, '$1'));
+    } catch {
+      return utf8Match[1].trim().replace(/^"(.*)"$/, '$1');
+    }
+  }
+
+  const basicMatch = raw.match(/filename\s*=\s*("?)([^";]+)\1/i);
+  if (basicMatch?.[2]) return basicMatch[2].trim();
+
+  return '';
+}
+
+export async function apiDownloadFile(
+  path,
+  { method = 'GET', body, auth = true, headers: extraHeaders, filenameFallback = 'export.xlsx' } = {}
+) {
+  const url = buildUrl(path);
+
+  if (auth) {
+    await ensureFreshAccessToken();
+  }
+
+  const buildHeaders = () => {
+    const headers = new Headers(extraHeaders || {});
+    if (auth) {
+      const { accessToken } = getAdminTokens();
+      if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`);
+    }
+    if (body !== undefined) {
+      headers.set('Content-Type', 'application/json');
+    }
+    return headers;
+  };
+
+  const init = {
+    method,
+    headers: buildHeaders(),
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  };
+
+  let res = await fetch(url, init);
+  if (auth && res.status === 401) {
+    const ok = await ensureFreshAccessToken({ forceRefresh: true });
+    if (ok) {
+      res = await fetch(url, { ...init, headers: buildHeaders() });
+    } else {
+      redirectToLogin();
+    }
+  }
+
+  if (!res.ok) {
+    const payload = await readPayload(res);
+    if (auth && res.status === 401) redirectToLogin();
+    throw new Error(errorMessage(payload, res.status));
+  }
+
+  const blob = await res.blob();
+  const fileName = parseFilenameFromDisposition(res.headers.get('Content-Disposition')) || filenameFallback;
+  const objectUrl = window.URL.createObjectURL(blob);
+  try {
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  } finally {
+    window.URL.revokeObjectURL(objectUrl);
+  }
+}
+
 export default apiFetchJson;
