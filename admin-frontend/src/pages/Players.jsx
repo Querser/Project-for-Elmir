@@ -16,6 +16,7 @@ export default function PlayersPage() {
   const [levels, setLevels] = useState([]);
 
   const [q, setQ] = useState('');
+  const [userIdFilter, setUserIdFilter] = useState('');
   const [levelId, setLevelId] = useState('');
   const [banFilter, setBanFilter] = useState('');
 
@@ -42,6 +43,8 @@ export default function PlayersPage() {
       params.set('limit', String(limit));
       params.set('offset', String(offset));
       if (q.trim()) params.set('q', q.trim());
+      const idFilter = userIdFilter.trim();
+      if (/^\d+$/.test(idFilter)) params.set('user_id', idFilter);
       if (levelId) params.set('level_id', levelId);
       if (banFilter === 'banned') params.set('is_banned', 'true');
       if (banFilter === 'not_banned') params.set('is_banned', 'false');
@@ -63,7 +66,7 @@ export default function PlayersPage() {
   useEffect(() => {
     loadUsers();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, levelId, banFilter, limit, offset]);
+  }, [q, userIdFilter, levelId, banFilter, limit, offset]);
 
   return (
     <AdminLayout
@@ -87,7 +90,15 @@ export default function PlayersPage() {
             <Input
               value={q}
               onChange={(e) => { setOffset(0); setQ(e.target.value); }}
-              placeholder="ID, имя, username, телефон, telegram_id"
+              placeholder="Имя, username, телефон, telegram_id"
+            />
+          </Field>
+
+          <Field label="Поиск по ID">
+            <Input
+              value={userIdFilter}
+              onChange={(e) => { setOffset(0); setUserIdFilter(e.target.value); }}
+              placeholder="Например: 123"
             />
           </Field>
 

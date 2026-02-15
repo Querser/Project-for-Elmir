@@ -12,7 +12,7 @@ import { useToast } from '../components/Toast.jsx';
 import { filterCanonicalLevels } from '../lib/levels.js';
 
 const URL_RE = /^https?:\/\/[^\s]+$/i;
-const BAN_REASON_RE = /^[\p{L}\p{N}\s.,:;()"'!?+\-/]{3,500}$/u;
+const BAN_REASON_RE = /^[\p{L}\p{N}\s.,:;()"'!?+\-/%#@&\u2116]*$/u;
 
 export default function PlayerDetailsPage({ userId }) {
   const toast = useToast();
@@ -26,6 +26,7 @@ export default function PlayerDetailsPage({ userId }) {
 
   const [nextLevelId, setNextLevelId] = useState('');
   const [banReason, setBanReason] = useState('');
+  const [banReasonError, setBanReasonError] = useState('');
   const [banUntil, setBanUntil] = useState('');
   const [banModalOpen, setBanModalOpen] = useState(false);
   const [notifyTitle, setNotifyTitle] = useState('Уведомление');
@@ -117,21 +118,22 @@ export default function PlayerDetailsPage({ userId }) {
     const reason = banReason.trim();
 
     if (!reason) {
-      toast.push('Укажите причину бана', 'error');
+      setBanReasonError('Укажите причину бана');
       return;
     }
     if (reason.length < 3) {
-      toast.push('Причина бана слишком короткая (минимум 3 символа)', 'error');
+      setBanReasonError('Причина бана слишком короткая (минимум 3 символа)');
       return;
     }
     if (reason.length > 500) {
-      toast.push('Причина бана слишком длинная (максимум 500 символов)', 'error');
+      setBanReasonError('Причина бана слишком длинная (максимум 500 символов)');
       return;
     }
     if (!BAN_REASON_RE.test(reason)) {
-      toast.push('Причина бана содержит недопустимые символы', 'error');
+      setBanReasonError('Причина бана содержит недопустимые символы');
       return;
     }
+    setBanReasonError('');
 
     setBusy(true);
     try {
@@ -145,6 +147,7 @@ export default function PlayerDetailsPage({ userId }) {
       });
       setBanModalOpen(false);
       setBanReason('');
+      setBanReasonError('');
       setBanUntil('');
       toast.push('Бан установлен', 'success');
       await loadUser();
@@ -288,7 +291,13 @@ export default function PlayerDetailsPage({ userId }) {
             </div>
 
             <div className="inline-flex gap-8" style={{ marginTop: 14 }}>
-              <Button variant="danger" onClick={() => setBanModalOpen(true)}>
+              <Button
+                variant="danger"
+                onClick={() => {
+                  setBanReasonError('');
+                  setBanModalOpen(true);
+                }}
+              >
                 Установить бан
               </Button>
               <Button variant="secondary" onClick={onUnban} disabled={actionBusy === 'unban'}>
@@ -463,10 +472,22 @@ export default function PlayerDetailsPage({ userId }) {
       {banModalOpen ? (
         <Modal
           title="Установить бан игроку"
-          onClose={() => setBanModalOpen(false)}
+          onClose={() => {
+            setBanReasonError('');
+            setBanModalOpen(false);
+          }}
           actions={(
             <>
-              <Button variant="secondary" onClick={() => setBanModalOpen(false)} disabled={busy}>Отмена</Button>
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setBanReasonError('');
+                  setBanModalOpen(false);
+                }}
+                disabled={busy}
+              >
+                Отмена
+              </Button>
               <Button variant="danger" onClick={onBanSubmit} disabled={busy}>
                 {busy ? 'Сохраняем...' : 'Установить бан'}
               </Button>
@@ -474,10 +495,16 @@ export default function PlayerDetailsPage({ userId }) {
           )}
         >
           <div className="grid-2">
-            <Field label="Причина бана">
-              <Input
+            <Field label="Причина бана" error={banReasonError}>
+              <Textarea
                 value={banReason}
-                onChange={(e) => setBanReason(e.target.value)}
+                onChange={(e) => {
+                  setBanReason(e.target.value);
+                  if (banReasonError) {
+                    setBanReasonError('');
+                  }
+                }}
+                rows={3}
                 placeholder="Например: задолженность за оффлайн оплату"
               />
             </Field>

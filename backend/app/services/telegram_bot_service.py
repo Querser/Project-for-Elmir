@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import html
 import json
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -263,9 +265,29 @@ def _get_setting_value(db: Session, key: str, default: str) -> str:
     return value or default
 
 
+def _html_to_plain_text(value: str | None) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+
+    text = raw
+    text = re.sub(r"(?is)<\s*br\s*/?\s*>", "\n", text)
+    text = re.sub(r"(?is)</\s*(p|div|h[1-6]|blockquote|pre)\s*>", "\n", text)
+    text = re.sub(r"(?is)<\s*(ul|ol)\b[^>]*>", "\n", text)
+    text = re.sub(r"(?is)</\s*(ul|ol)\s*>", "\n", text)
+    text = re.sub(r"(?is)<\s*li\b[^>]*>", "• ", text)
+    text = re.sub(r"(?is)</\s*li\s*>", "\n", text)
+    text = re.sub(r"(?is)<[^>]+>", "", text)
+    text = html.unescape(text)
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
 def _format_notification_message(title: str, text: str, url: str | None = None) -> str:
-    safe_title = (title or "").strip() or "Уведомление"
-    safe_text = (text or "").strip()
+    safe_title = _html_to_plain_text(title) or "Уведомление"
+    safe_text = _html_to_plain_text(text)
     chunks = [f"🔔 {safe_title}"]
     if safe_text:
         chunks.append(safe_text)
@@ -490,8 +512,8 @@ def _send_notifications_list(db: Session, user: User) -> None:
         if isinstance(dt, datetime):
             dt_local = dt.astimezone(timezone.utc)
             dt_text = dt_local.strftime("%d.%m %H:%M")
-        title = (getattr(item, "title", "") or "Уведомление").strip()
-        body = (getattr(item, "text", "") or "").strip()
+        title = _html_to_plain_text(getattr(item, "title", "")) or "Уведомление"
+        body = _html_to_plain_text(getattr(item, "text", ""))
         if len(body) > 120:
             body = body[:117] + "..."
         if dt_text:

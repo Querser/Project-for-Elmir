@@ -6,6 +6,8 @@ from sqlalchemy.orm import Session
 
 from app.services.policies import cancel_deadline_at, pick_price_for_user, is_late_cancel
 from app.models.setting import Setting
+from app.models.level import Level
+from app.schemas.training import CANONICAL_LEVEL_NAMES
 from app.services.ban_service import get_active_ban
 
 # Пытаемся подцепить твою модель price tiers (как ты её назвал в новых файлах)
@@ -45,6 +47,92 @@ def _safe_text(v: Any) -> str:
         return str(v).strip()
     except Exception:
         return ""
+
+
+_LEVEL_ORDER = {name: idx for idx, name in enumerate(CANONICAL_LEVEL_NAMES)}
+
+
+def _canonical_level_name(value: Any) -> str | None:
+    raw = _safe_text(value).replace("−", "-")
+    if not raw:
+        return None
+    if raw in _LEVEL_ORDER:
+        return raw
+
+    lowered = raw.lower()
+    if "нович" in lowered:
+        return "Новичок"
+    if "средний-" in lowered:
+        return "Средний-"
+    if lowered == "средний":
+        return "Средний"
+    if "средний+" in lowered:
+        return "Средний+"
+    if "лайтпро" in lowered or "lightpro" in lowered:
+        return "Средний+"
+    if "лайт+" in lowered or "light+" in lowered:
+        return "Средний"
+    if "лайт" in lowered or "light" in lowered:
+        return "Средний-"
+    if "медиум" in lowered or "medium" in lowered:
+        return "Средний+"
+    return None
+
+
+def _resolve_user_level_name(db: Session, user: Any) -> str | None:
+    direct = _canonical_level_name(getattr(getattr(user, "level", None), "name", None))
+    if direct:
+        return direct
+
+    level_id = getattr(user, "level_id", None)
+    if level_id is None:
+        return None
+
+    row = db.query(Level).filter(Level.id == int(level_id)).first()
+    return _canonical_level_name(getattr(row, "name", None))
+
+
+def _get_level_block_reason(db: Session, *, user: Any, training: Any) -> tuple[str | None, str | None]:
+    min_level_name = _canonical_level_name(getattr(training, "min_level_name", None))
+    max_level_name = _canonical_level_name(getattr(training, "max_level_name", None))
+
+    user_level_name = _resolve_user_level_name(db, user)
+
+    if min_level_name is None and max_level_name is None:
+        return None, user_level_name
+
+    required_min = min_level_name or CANONICAL_LEVEL_NAMES[0]
+    required_max = max_level_name or CANONICAL_LEVEL_NAMES[-1]
+    min_idx = _LEVEL_ORDER.get(required_min)
+    max_idx = _LEVEL_ORDER.get(required_max)
+    if min_idx is None or max_idx is None:
+        return None, user_level_name
+
+    if min_idx > max_idx:
+        min_idx, max_idx = max_idx, min_idx
+        required_min, required_max = required_max, required_min
+
+    if user_level_name is None:
+        return (
+            "Вы не можете записаться: у вас не указан уровень игрока. Обратитесь к администратору.",
+            None,
+        )
+
+    user_idx = _LEVEL_ORDER.get(user_level_name)
+    if user_idx is None:
+        return (
+            "Вы не можете записаться: ваш уровень не распознан. Обратитесь к администратору.",
+            user_level_name,
+        )
+
+    if user_idx < min_idx or user_idx > max_idx:
+        required = required_min if required_min == required_max else f"{required_min} — {required_max}"
+        return (
+            f'Вы не можете записаться: ваш уровень "{user_level_name}" не соответствует требуемому "{required}".',
+            user_level_name,
+        )
+
+    return None, user_level_name
 
 
 def _get_setting_value(db: Session, key: str, default: str) -> str:
@@ -187,6 +275,8 @@ def build_training_ui_payload(
     user_active_ban_reason: str | None = None
     user_active_ban_until = None
     user_active_ban_text: str | None = None
+    user_level_name: str | None = None
+    user_level_block_reason: str | None = None
     if user is not None and user_enrollment_status in ("none", "", "cancelled", "canceled"):
         user_id = getattr(user, "id", None)
         if user_id is not None:
@@ -205,8 +295,14 @@ def build_training_ui_payload(
                 )
 
         if not user_has_active_ban:
-            can_enroll = free_places > 0
-            can_enroll_reserve = (free_places <= 0) and is_reserve_available
+            user_level_block_reason, user_level_name = _get_level_block_reason(db, user=user, training=training)
+            if not user_level_block_reason:
+                can_enroll = free_places > 0
+                can_enroll_reserve = (free_places <= 0) and is_reserve_available
+        else:
+            user_level_name = _resolve_user_level_name(db, user)
+    elif user is not None:
+        user_level_name = _resolve_user_level_name(db, user)
 
     deadline = cancel_deadline_at(training)
     can_cancel = False
@@ -226,6 +322,8 @@ def build_training_ui_payload(
         "user_active_ban_reason": user_active_ban_reason,
         "user_active_ban_until": user_active_ban_until,
         "user_active_ban_text": user_active_ban_text,
+        "user_level_name": user_level_name,
+        "user_level_block_reason": user_level_block_reason,
         "user_enrollment_status": user_enrollment_status,
         "user_queue_position": user_queue_position,
         "user_enrollment_id": user_enrollment_id,

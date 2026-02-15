@@ -482,6 +482,8 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
     training?.user_active_ban_reason || training?.user_active_ban_text || '',
   ).toString().trim();
   const userBanUntil = useMemo(() => parseDate(training?.user_active_ban_until), [training]);
+  const userLevelBlockReason = maybeFixUtf8Mojibake(training?.user_level_block_reason || '').toString().trim();
+  const hasLevelBlock = !isEnrolled && Boolean(userLevelBlockReason);
 
   const cancelDeadlineAt = useMemo(() => parseDate(training?.cancel_deadline_at), [training]);
 
@@ -579,19 +581,21 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
   const enrollButtonLabel = useMemo(() => {
     if (isEnrolled) return 'Отменить запись';
     if (userHasActiveBan) return 'Вы в бане';
+    if (hasLevelBlock) return 'Уровень не подходит';
     if (canEnroll) return 'Записаться';
     if (canEnrollReserve && isReserveAvailable) return 'Записаться в резерв';
     return 'Запись недоступна';
-  }, [isEnrolled, userHasActiveBan, canEnroll, canEnrollReserve, isReserveAvailable]);
+  }, [isEnrolled, userHasActiveBan, hasLevelBlock, canEnroll, canEnrollReserve, isReserveAvailable]);
 
   const enrollButtonDisabled = useMemo(() => {
     if (loading || saving) return true;
     if (isEnrolled) return !canCancel;
+    if (hasLevelBlock) return true;
     if (userHasActiveBan) return false;
     if (canEnroll) return false;
     if (canEnrollReserve && isReserveAvailable) return false;
     return true;
-  }, [loading, saving, isEnrolled, canCancel, userHasActiveBan, canEnroll, canEnrollReserve, isReserveAvailable]);
+  }, [loading, saving, isEnrolled, canCancel, hasLevelBlock, userHasActiveBan, canEnroll, canEnrollReserve, isReserveAvailable]);
 
   const priceLabel = useMemo(() => {
     const p = training?.final_price ?? training?.price;
@@ -609,6 +613,10 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
 
     if (userHasActiveBan) {
       setBanInfoOpen(true);
+      return;
+    }
+
+    if (hasLevelBlock) {
       return;
     }
 
@@ -898,6 +906,11 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
               {userHasActiveBan ? (
                 <p className="hint" style={{ color: 'var(--danger)' }}>
                   У вас активный бан. Нажмите кнопку записи, чтобы посмотреть причину.
+                </p>
+              ) : null}
+              {hasLevelBlock ? (
+                <p className="hint" style={{ color: 'var(--danger)' }}>
+                  {userLevelBlockReason}
                 </p>
               ) : null}
             </div>

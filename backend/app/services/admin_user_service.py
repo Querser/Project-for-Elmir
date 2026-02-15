@@ -45,6 +45,7 @@ def list_admin_users(
     db: Session,
     *,
     q: str | None,
+    user_id: int | None,
     level_id: int | None,
     is_banned: bool | None,
     limit: int,
@@ -68,6 +69,9 @@ def list_admin_users(
                     cast(User.telegram_id, String).ilike(like),
                 )
             )
+
+    if user_id is not None:
+        query = query.filter(User.id == user_id)
 
     if level_id is not None:
         query = query.filter(User.level_id == level_id)

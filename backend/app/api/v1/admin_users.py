@@ -47,6 +47,7 @@ def _actor_payload(actor: Any) -> tuple[int | None, str]:
 @router.get("", response_model=dict)
 def list_users_admin(
     q: str | None = Query(default=None),
+    user_id: int | None = Query(default=None, ge=1),
     level_id: int | None = Query(default=None),
     is_banned: bool | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=500),
@@ -57,6 +58,7 @@ def list_users_admin(
     items, total = list_admin_users(
         db,
         q=q,
+        user_id=user_id,
         level_id=level_id,
         is_banned=is_banned,
         limit=limit,
