@@ -463,6 +463,11 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
   }, [startAt, endAt]);
 
   const dateLabel = useMemo(() => formatDate(startAt), [startAt]);
+  const isTrainingFinished = useMemo(() => {
+    if (!startAt) return false;
+    const endAtMs = (endAt ?? startAt).getTime();
+    return Date.now() >= endAtMs;
+  }, [startAt, endAt]);
 
   const levelChips = useMemo(() => buildLevelChips(training), [training]);
 
@@ -621,24 +626,26 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
 
   const enrollButtonLabel = useMemo(() => {
     if (pendingPaymentId && !isEnrolled) return 'Проверить оплату';
+    if (isTrainingFinished) return 'Тренировка завершена';
     if (isEnrolled) return 'Отменить запись';
     if (userHasActiveBan) return 'Вы в бане';
     if (hasLevelBlock) return 'Уровень не подходит';
     if (canEnroll) return 'Записаться';
     if (canEnrollReserve && isReserveAvailable) return 'Записаться в резерв';
     return 'Запись недоступна';
-  }, [isEnrolled, pendingPaymentId, userHasActiveBan, hasLevelBlock, canEnroll, canEnrollReserve, isReserveAvailable]);
+  }, [isEnrolled, pendingPaymentId, isTrainingFinished, userHasActiveBan, hasLevelBlock, canEnroll, canEnrollReserve, isReserveAvailable]);
 
   const enrollButtonDisabled = useMemo(() => {
     if (loading || saving || checkingPayment) return true;
-    if (isEnrolled) return !canCancel;
     if (pendingPaymentId) return false;
+    if (isTrainingFinished) return true;
+    if (isEnrolled) return !canCancel;
     if (hasLevelBlock) return true;
     if (userHasActiveBan) return false;
     if (canEnroll) return false;
     if (canEnrollReserve && isReserveAvailable) return false;
     return true;
-  }, [loading, saving, checkingPayment, isEnrolled, canCancel, pendingPaymentId, hasLevelBlock, userHasActiveBan, canEnroll, canEnrollReserve, isReserveAvailable]);
+  }, [loading, saving, checkingPayment, pendingPaymentId, isTrainingFinished, isEnrolled, canCancel, hasLevelBlock, userHasActiveBan, canEnroll, canEnrollReserve, isReserveAvailable]);
 
   const priceLabel = useMemo(() => {
     const p = training?.final_price ?? training?.price;
@@ -1028,6 +1035,11 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
               {cancelBlockedHint ? (
                 <p className="hint" style={{ color: 'var(--danger)' }}>
                   {cancelBlockedHint}
+                </p>
+              ) : null}
+              {isTrainingFinished ? (
+                <p className="hint" style={{ color: 'var(--danger)' }}>
+                  Тренировка уже закончилась.
                 </p>
               ) : null}
               {userHasActiveBan ? (

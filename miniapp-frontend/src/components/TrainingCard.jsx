@@ -5,6 +5,12 @@ function num(v) {
   return Number.isFinite(n) ? n : null;
 }
 
+function parseDate(value) {
+  if (!value) return null;
+  const dt = new Date(value);
+  return Number.isNaN(dt.getTime()) ? null : dt;
+}
+
 export default function TrainingCard({ training, onClick, timeLabel }) {
   const img =
     training?.image_url ||
@@ -19,11 +25,24 @@ export default function TrainingCard({ training, onClick, timeLabel }) {
     const f = num(training?.free_places);
     if (f != null) return f;
     const occ = num(training?.occupied_main) ?? 0;
-    const l = total - occ;
-    return l >= 0 ? l : 0;
+    const left = total - occ;
+    return left >= 0 ? left : 0;
   }, [training, total]);
 
   const tag = training?.coach_name ? 'с тренером' : null;
+  const startAt = useMemo(
+    () => parseDate(training?.starts_at ?? training?.start_at ?? training?.startsAt ?? training?.startAt),
+    [training],
+  );
+  const durationMinutes = useMemo(
+    () => Math.max(0, num(training?.duration_minutes ?? training?.durationMinutes) ?? 0),
+    [training],
+  );
+  const isFinished = useMemo(() => {
+    if (!startAt) return false;
+    const endAtMs = startAt.getTime() + durationMinutes * 60_000;
+    return Date.now() >= endAtMs;
+  }, [startAt, durationMinutes]);
 
   return (
     <article className="session-card" onClick={onClick} role="button" tabIndex={0}>
@@ -31,7 +50,7 @@ export default function TrainingCard({ training, onClick, timeLabel }) {
         <div className="session-time-pill">{timeLabel}</div>
         <div className="session-chip-row">
           {levels.map((lvl, i) => (
-             <span key={i} className="session-chip chip-level-light">{lvl}</span>
+            <span key={i} className="session-chip chip-level-light">{lvl}</span>
           ))}
         </div>
       </div>
@@ -46,9 +65,9 @@ export default function TrainingCard({ training, onClick, timeLabel }) {
 
         <div className="session-footer">
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M5 12h14M5 12l3-3M5 12l3 3"/>
+            <path d="M5 12h14M5 12l3-3M5 12l3 3" />
           </svg>
-          <span>{total} мест всего · свободно {free}</span>
+          <span>{isFinished ? 'Тренировка уже закончилась' : `${total} мест всего · свободно ${free}`}</span>
         </div>
       </div>
     </article>

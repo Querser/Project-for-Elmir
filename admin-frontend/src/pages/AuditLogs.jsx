@@ -4,7 +4,7 @@ import Card from '../components/Card.jsx';
 import Button from '../components/Button.jsx';
 import Spinner from '../components/Spinner.jsx';
 import { Field, Input, Select } from '../components/Field.jsx';
-import { apiFetchJson } from '../lib/api.js';
+import { apiDownloadFile, apiFetchJson } from '../lib/api.js';
 import { formatDateTime, toIsoFromDatetimeLocal } from '../lib/format.js';
 import { useToast } from '../components/Toast.jsx';
 
@@ -53,6 +53,8 @@ export default function AuditLogsPage() {
   const [dateTo, setDateTo] = useState('');
 
   const [busy, setBusy] = useState(false);
+  const [exportUsersBusy, setExportUsersBusy] = useState(false);
+  const [exportPaymentsBusy, setExportPaymentsBusy] = useState(false);
 
   const page = useMemo(() => Math.floor(offset / limit) + 1, [offset, limit]);
   const pages = useMemo(() => Math.max(1, Math.ceil(total / limit)), [total, limit]);
@@ -81,6 +83,38 @@ export default function AuditLogsPage() {
     }
   }
 
+  async function exportUsers() {
+    if (exportUsersBusy) return;
+    setExportUsersBusy(true);
+    try {
+      await apiDownloadFile('/admin/users/export/users.xlsx', {
+        auth: true,
+        filenameFallback: `users-export-${new Date().toISOString().slice(0, 10)}.xlsx`,
+      });
+      toast.push('Файл с игроками сформирован', 'success');
+    } catch (e) {
+      toast.push(e?.message || 'Ошибка выгрузки игроков', 'error');
+    } finally {
+      setExportUsersBusy(false);
+    }
+  }
+
+  async function exportPayments() {
+    if (exportPaymentsBusy) return;
+    setExportPaymentsBusy(true);
+    try {
+      await apiDownloadFile('/admin/users/export/payments.xlsx', {
+        auth: true,
+        filenameFallback: `payments-last-quarter-${new Date().toISOString().slice(0, 10)}.xlsx`,
+      });
+      toast.push('Файл с платежами за последний квартал сформирован', 'success');
+    } catch (e) {
+      toast.push(e?.message || 'Ошибка выгрузки платежей', 'error');
+    } finally {
+      setExportPaymentsBusy(false);
+    }
+  }
+
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -91,13 +125,35 @@ export default function AuditLogsPage() {
       title="Журнал действий"
       subtitle="Логи событий системы и действий администратора"
       actions={(
-        <Button variant="secondary" onClick={load} disabled={busy}>
-          {busy ? (
-            <span className="inline-flex items-center gap-8"><Spinner size={16} /> Загрузка</span>
-          ) : (
-            'Обновить'
-          )}
-        </Button>
+        <>
+          <Button variant="secondary" onClick={exportUsers} disabled={busy || exportUsersBusy}>
+            {exportUsersBusy ? (
+              <span className="inline-flex items-center gap-8">
+                <Spinner size={16} /> Выгрузка игроков
+              </span>
+            ) : (
+              'Экспорт игроков (Excel)'
+            )}
+          </Button>
+          <Button variant="secondary" onClick={exportPayments} disabled={busy || exportPaymentsBusy}>
+            {exportPaymentsBusy ? (
+              <span className="inline-flex items-center gap-8">
+                <Spinner size={16} /> Выгрузка платежей
+              </span>
+            ) : (
+              'Экспорт платежей (квартал)'
+            )}
+          </Button>
+          <Button variant="secondary" onClick={load} disabled={busy}>
+            {busy ? (
+              <span className="inline-flex items-center gap-8">
+                <Spinner size={16} /> Загрузка
+              </span>
+            ) : (
+              'Обновить'
+            )}
+          </Button>
+        </>
       )}
     >
       <Card className="filters">
