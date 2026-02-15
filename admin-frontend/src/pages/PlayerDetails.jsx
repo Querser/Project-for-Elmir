@@ -155,16 +155,6 @@ export default function PlayerDetailsPage({ userId }) {
     setNotifyText(html);
   }
 
-  function applyNotificationEditorCommand(command) {
-    try {
-      editorRef.current?.focus();
-      document.execCommand(command, false, null);
-      syncNotificationEditorValue();
-    } catch {
-      // ignore editor command failures in unsupported webviews
-    }
-  }
-
   function clearNotificationEditor() {
     if (editorRef.current) editorRef.current.innerHTML = '';
     setNotifyText('');
@@ -476,63 +466,6 @@ export default function PlayerDetailsPage({ userId }) {
 
             <Field label="Текст уведомления">
               <div className="rich-editor-wrap">
-                <div className="rich-editor-toolbar">
-                  <button
-                    type="button"
-                    className="rich-editor-btn"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => applyNotificationEditorCommand('bold')}
-                    title="Жирный"
-                  >
-                    B
-                  </button>
-                  <button
-                    type="button"
-                    className="rich-editor-btn"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => applyNotificationEditorCommand('italic')}
-                    title="Курсив"
-                  >
-                    I
-                  </button>
-                  <button
-                    type="button"
-                    className="rich-editor-btn"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => applyNotificationEditorCommand('underline')}
-                    title="Подчеркнутый"
-                  >
-                    U
-                  </button>
-                  <button
-                    type="button"
-                    className="rich-editor-btn"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => applyNotificationEditorCommand('insertUnorderedList')}
-                    title="Список"
-                  >
-                    • List
-                  </button>
-                  <button
-                    type="button"
-                    className="rich-editor-btn"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => applyNotificationEditorCommand('insertOrderedList')}
-                    title="Нумерованный список"
-                  >
-                    1. List
-                  </button>
-                  <button
-                    type="button"
-                    className="rich-editor-btn"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => applyNotificationEditorCommand('removeFormat')}
-                    title="Очистить формат"
-                  >
-                    Clear
-                  </button>
-                </div>
-
                 <div
                   ref={editorRef}
                   className="rich-editor"

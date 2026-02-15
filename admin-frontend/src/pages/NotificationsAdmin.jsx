@@ -155,16 +155,6 @@ export default function NotificationsAdminPage() {
     setText(html);
   }
 
-  function applyEditorCommand(command) {
-    try {
-      editorRef.current?.focus();
-      document.execCommand(command, false, null);
-      syncEditorValue();
-    } catch {
-      // ignore editor command failures in unsupported webviews
-    }
-  }
-
   function clearEditor() {
     if (editorRef.current) editorRef.current.innerHTML = '';
     setText('');
@@ -384,63 +374,6 @@ export default function NotificationsAdminPage() {
 
         <Field label="Текст">
           <div className="rich-editor-wrap">
-            <div className="rich-editor-toolbar">
-              <button
-                type="button"
-                className="rich-editor-btn"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => applyEditorCommand('bold')}
-                title="Жирный"
-              >
-                B
-              </button>
-              <button
-                type="button"
-                className="rich-editor-btn"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => applyEditorCommand('italic')}
-                title="Курсив"
-              >
-                I
-              </button>
-              <button
-                type="button"
-                className="rich-editor-btn"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => applyEditorCommand('underline')}
-                title="Подчеркнутый"
-              >
-                U
-              </button>
-              <button
-                type="button"
-                className="rich-editor-btn"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => applyEditorCommand('insertUnorderedList')}
-                title="Список"
-              >
-                • List
-              </button>
-              <button
-                type="button"
-                className="rich-editor-btn"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => applyEditorCommand('insertOrderedList')}
-                title="Нумерованный список"
-              >
-                1. List
-              </button>
-              <button
-                type="button"
-                className="rich-editor-btn"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => applyEditorCommand('removeFormat')}
-                title="Очистить формат"
-              >
-                Clear
-              </button>
-            </div>
-
             <div
               ref={editorRef}
               className="rich-editor"

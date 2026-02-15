@@ -1,6 +1,8 @@
 ﻿# app/api/v1/admin_billing.py
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
@@ -20,6 +22,7 @@ from app.services.ban_service import (
 from app.services.debt_service import close_debt, list_debts
 
 router = APIRouter(prefix="/admin", tags=["admin-billing"])
+log = logging.getLogger("app.admin.billing")
 
 
 def _dump(model):
@@ -136,6 +139,13 @@ def manual_ban_admin(
     _: User = Depends(get_current_admin),
 ):
     ban = manual_ban_user(db, user_id=user_id, reason=body.reason)
+    try:
+        from app.services.telegram_bot_service import send_ban_notice_to_user
+
+        send_ban_notice_to_user(db, user_id=user_id)
+    except Exception:
+        log.exception("Failed to send Telegram ban notice for user_id=%s", user_id)
+
     dto = _validate(BanResponse, ban)
     return success_response(_dump(dto))
 

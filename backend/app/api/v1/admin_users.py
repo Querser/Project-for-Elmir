@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from io import BytesIO
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -27,6 +28,7 @@ from app.services.admin_export_service import (
 from app.services.ban_service import manual_ban_user, unban_user
 
 router = APIRouter(prefix="/admin/users", tags=["admin-users"])
+log = logging.getLogger("app.admin.users")
 
 
 class AdminBanRequest(BaseModel):
@@ -177,6 +179,14 @@ def ban_user_admin(
     admin_actor: Any = Depends(get_current_admin_user_any),
 ):
     ban = manual_ban_user(db, user_id=user_id, reason=payload.reason, until=payload.until)
+    telegram_notified = False
+    try:
+        from app.services.telegram_bot_service import send_ban_notice_to_user
+
+        telegram_notified = bool(send_ban_notice_to_user(db, user_id=user_id))
+    except Exception:
+        log.exception("Failed to send Telegram ban notice for user_id=%s", user_id)
+
     actor_id, actor_name = _actor_payload(admin_actor)
     write_audit_log(
         db,
@@ -190,6 +200,7 @@ def ban_user_admin(
             "ban_type": ban.type.value if hasattr(ban.type, "value") else str(ban.type),
             "reason": payload.reason,
             "until": payload.until.isoformat() if payload.until else None,
+            "telegram_notified": telegram_notified,
         },
     )
     return success_response(
@@ -200,6 +211,7 @@ def ban_user_admin(
             "reason": ban.reason,
             "active": bool(ban.active),
             "until": ban.until,
+            "telegram_notified": telegram_notified,
         }
     )
 

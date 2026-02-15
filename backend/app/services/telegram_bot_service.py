@@ -334,6 +334,22 @@ def send_bot_notification_to_users(
     return sent
 
 
+def send_ban_notice_to_user(db: Session, *, user_id: int) -> bool:
+    user = db.query(User).filter(User.id == int(user_id)).one_or_none()
+    if user is None:
+        return False
+
+    tg_id = int(getattr(user, "telegram_id", 0) or 0)
+    if not tg_id:
+        return False
+
+    text = _format_ban_notice(db, user_id=int(user_id))
+    if not text:
+        return False
+
+    return send_bot_message_to_user(telegram_id=tg_id, text=text)
+
+
 def _save_avatar_if_possible(db: Session, user: User) -> None:
     if not hasattr(user, "avatar_url"):
         return
