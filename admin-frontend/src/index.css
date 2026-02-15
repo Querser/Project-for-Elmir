@@ -215,6 +215,7 @@ a {
 
 .input {
   width: 100%;
+  min-width: 0;
   max-width: 100%;
   border: 1px solid var(--border);
   background: var(--surface-soft);
@@ -243,6 +244,9 @@ select.input {
 input[type="date"].input,
 input[type="time"].input,
 input[type="datetime-local"].input {
+  inline-size: 100%;
+  min-inline-size: 0;
+  display: block;
   min-width: 0;
   width: 100%;
   max-width: 100%;
@@ -769,6 +773,13 @@ input[type="datetime-local"].input {
 
   .input {
     font-size: 16px;
+  }
+
+  input[type="date"].input,
+  input[type="time"].input,
+  input[type="datetime-local"].input {
+    width: 100%;
+    max-width: 100%;
   }
 
   .pager {

@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import AdminLayout from '../components/AdminLayout.jsx';
 import Card from '../components/Card.jsx';
 import Button from '../components/Button.jsx';
 import Spinner from '../components/Spinner.jsx';
 import Modal from '../components/Modal.jsx';
-import { Field, Input, Select, Textarea } from '../components/Field.jsx';
+import { Field, Input, Select } from '../components/Field.jsx';
 import { apiFetchJson } from '../lib/api.js';
 import { navigate } from '../lib/router.js';
 import { formatDate, formatDateTime, formatMoney, toIsoFromDatetimeLocal } from '../lib/format.js';
@@ -13,6 +13,105 @@ import { filterCanonicalLevels } from '../lib/levels.js';
 
 const URL_RE = /^https?:\/\/[^\s]+$/i;
 const BAN_REASON_RE = /^[\p{L}\p{N}\s.,:;()"'!?+\-/%#@&\u2116]*$/u;
+
+function extractPlainText(html) {
+  const raw = String(html || '');
+  if (!raw.trim()) return '';
+  if (typeof window === 'undefined' || typeof DOMParser === 'undefined') {
+    return raw.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+  const doc = new DOMParser().parseFromString(raw, 'text/html');
+  return (doc.body?.textContent || '').replace(/\s+/g, ' ').trim();
+}
+
+function sanitizeInlineStyle(styleValue) {
+  const raw = String(styleValue || '');
+  return raw
+    .replace(/expression\s*\([^)]*\)/gi, '')
+    .replace(/behavior\s*:[^;]+;?/gi, '')
+    .replace(/url\s*\(\s*['"]?\s*javascript:[^)]+\)/gi, '')
+    .trim();
+}
+
+function sanitizeHtml(html) {
+  const raw = String(html || '');
+  if (!raw.trim()) return '';
+
+  if (typeof window === 'undefined' || typeof DOMParser === 'undefined') {
+    return raw.replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '');
+  }
+
+  const allowedTags = new Set([
+    'a', 'b', 'strong', 'i', 'em', 'u', 's',
+    'span', 'div', 'p', 'br',
+    'ul', 'ol', 'li',
+    'blockquote', 'code', 'pre',
+    'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+    'font',
+  ]);
+  const allowedAttrs = new Set(['style', 'href', 'target', 'rel', 'title']);
+
+  const doc = new DOMParser().parseFromString(`<div>${raw}</div>`, 'text/html');
+  const root = doc.body.firstElementChild;
+  if (!root) return '';
+
+  const walk = (node) => {
+    const children = Array.from(node.children || []);
+    children.forEach(walk);
+
+    const tag = node.tagName?.toLowerCase?.() || '';
+    if (!allowedTags.has(tag)) {
+      const parent = node.parentNode;
+      if (!parent) return;
+      while (node.firstChild) {
+        parent.insertBefore(node.firstChild, node);
+      }
+      parent.removeChild(node);
+      return;
+    }
+
+    Array.from(node.attributes || []).forEach((attr) => {
+      const name = attr.name.toLowerCase();
+      const value = String(attr.value || '');
+
+      if (name.startsWith('on') || !allowedAttrs.has(name)) {
+        node.removeAttribute(attr.name);
+        return;
+      }
+
+      if (name === 'style') {
+        const safe = sanitizeInlineStyle(value);
+        if (safe) node.setAttribute('style', safe);
+        else node.removeAttribute('style');
+        return;
+      }
+
+      if (name === 'href') {
+        if (!/^(https?:|mailto:|tg:)/i.test(value)) {
+          node.removeAttribute('href');
+        }
+        return;
+      }
+
+      if (name === 'target') {
+        node.setAttribute('target', '_blank');
+        return;
+      }
+
+      if (name === 'rel') {
+        node.setAttribute('rel', 'noopener noreferrer');
+      }
+    });
+
+    if (tag === 'a' && node.getAttribute('href')) {
+      node.setAttribute('target', '_blank');
+      node.setAttribute('rel', 'noopener noreferrer');
+    }
+  };
+
+  walk(root);
+  return root.innerHTML;
+}
 
 export default function PlayerDetailsPage({ userId }) {
   const toast = useToast();
@@ -32,11 +131,33 @@ export default function PlayerDetailsPage({ userId }) {
   const [notifyTitle, setNotifyTitle] = useState('Уведомление');
   const [notifyText, setNotifyText] = useState('');
   const [notifyUrl, setNotifyUrl] = useState('');
+  const editorRef = useRef(null);
 
   const activeBan = useMemo(
     () => (user?.bans || []).find((b) => Boolean(b.active)) || null,
     [user]
   );
+  const notifyTextPlain = useMemo(() => extractPlainText(notifyText), [notifyText]);
+
+  function syncNotificationEditorValue() {
+    const html = editorRef.current?.innerHTML || '';
+    setNotifyText(html);
+  }
+
+  function applyNotificationEditorCommand(command) {
+    try {
+      editorRef.current?.focus();
+      document.execCommand(command, false, null);
+      syncNotificationEditorValue();
+    } catch {
+      // ignore editor command failures in unsupported webviews
+    }
+  }
+
+  function clearNotificationEditor() {
+    if (editorRef.current) editorRef.current.innerHTML = '';
+    setNotifyText('');
+  }
 
   async function loadLevels() {
     try {
@@ -176,10 +297,12 @@ export default function PlayerDetailsPage({ userId }) {
 
   async function onSendNotificationToUser() {
     const cleanTitle = notifyTitle.trim() || 'Уведомление';
-    const cleanText = notifyText.trim();
+    const sourceText = editorRef.current?.innerHTML ?? notifyText;
+    const cleanText = sanitizeHtml(sourceText);
+    const cleanTextPlain = extractPlainText(cleanText);
     const cleanUrl = notifyUrl.trim();
 
-    if (!cleanText) {
+    if (!cleanTextPlain) {
       toast.push('Введите текст уведомления', 'error');
       return;
     }
@@ -187,7 +310,7 @@ export default function PlayerDetailsPage({ userId }) {
       toast.push('Заголовок слишком длинный (максимум 120 символов)', 'error');
       return;
     }
-    if (cleanText.length > 4000) {
+    if (cleanTextPlain.length > 4000) {
       toast.push('Текст слишком длинный (максимум 4000 символов)', 'error');
       return;
     }
@@ -210,7 +333,7 @@ export default function PlayerDetailsPage({ userId }) {
         },
       });
       toast.push('Уведомление отправлено', 'success');
-      setNotifyText('');
+      clearNotificationEditor();
       setNotifyUrl('');
     } catch (e) {
       toast.push(e?.message || 'Ошибка отправки уведомления', 'error');
@@ -341,12 +464,79 @@ export default function PlayerDetailsPage({ userId }) {
             </div>
 
             <Field label="Текст уведомления">
-              <Textarea
-                rows={3}
-                value={notifyText}
-                onChange={(e) => setNotifyText(e.target.value)}
-                placeholder="Текст уведомления для игрока..."
-              />
+              <div className="rich-editor-wrap">
+                <div className="rich-editor-toolbar">
+                  <button
+                    type="button"
+                    className="rich-editor-btn"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => applyNotificationEditorCommand('bold')}
+                    title="Жирный"
+                  >
+                    B
+                  </button>
+                  <button
+                    type="button"
+                    className="rich-editor-btn"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => applyNotificationEditorCommand('italic')}
+                    title="Курсив"
+                  >
+                    I
+                  </button>
+                  <button
+                    type="button"
+                    className="rich-editor-btn"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => applyNotificationEditorCommand('underline')}
+                    title="Подчеркнутый"
+                  >
+                    U
+                  </button>
+                  <button
+                    type="button"
+                    className="rich-editor-btn"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => applyNotificationEditorCommand('insertUnorderedList')}
+                    title="Список"
+                  >
+                    • List
+                  </button>
+                  <button
+                    type="button"
+                    className="rich-editor-btn"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => applyNotificationEditorCommand('insertOrderedList')}
+                    title="Нумерованный список"
+                  >
+                    1. List
+                  </button>
+                  <button
+                    type="button"
+                    className="rich-editor-btn"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => applyNotificationEditorCommand('removeFormat')}
+                    title="Очистить формат"
+                  >
+                    Clear
+                  </button>
+                </div>
+
+                <div
+                  ref={editorRef}
+                  className="rich-editor"
+                  contentEditable
+                  role="textbox"
+                  aria-multiline="true"
+                  data-placeholder="Текст уведомления для игрока..."
+                  suppressContentEditableWarning
+                  onInput={syncNotificationEditorValue}
+                  onBlur={syncNotificationEditorValue}
+                />
+              </div>
+              <div className="field-hint">
+                Лимит: 4000 символов текста. Сейчас: {notifyTextPlain.length}.
+              </div>
             </Field>
 
             <Button onClick={onSendNotificationToUser} disabled={actionBusy === 'notify'}>

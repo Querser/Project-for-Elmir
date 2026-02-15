@@ -96,9 +96,6 @@ export default function LoginPage() {
           </Button>
         </form>
 
-        <div className="login-hint">
-          Логин/пароль берутся из `.env.dev`: `ADMIN_USERNAME` и `ADMIN_PASSWORD`.
-        </div>
       </Card>
     </div>
   );

@@ -454,8 +454,7 @@ export default function NotificationsAdminPage() {
             />
           </div>
           <div className="field-hint">
-            Можно вставлять форматированный текст (шрифты, стили, списки). Лимит: 4000 символов текста.
-            Сейчас: {textPlain.length}.
+            Лимит: 4000 символов текста. Сейчас: {textPlain.length}.
           </div>
         </Field>
 

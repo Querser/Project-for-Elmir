@@ -1,8 +1,6 @@
 ﻿from __future__ import annotations
 
 import enum
-from typing import Optional
-from datetime import datetime
 
 from sqlalchemy import Column, DateTime, Enum as SAEnum, ForeignKey, Integer, Numeric, func, text
 from sqlalchemy.orm import relationship

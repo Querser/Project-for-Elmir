@@ -273,7 +273,7 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
 
   async function loadLocations() {
     try {
-      const res = await apiFetchJson('/locations?limit=500&offset=0&only_with_trainings=false', { auth: false });
+      const res = await apiFetchJson('/locations?limit=500&offset=0&only_with_trainings=false', { auth: true });
       setLocations(res?.items || []);
     } catch {
       // Справочник локаций не критичен: можно ввести локацию вручную.
