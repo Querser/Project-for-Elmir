@@ -190,6 +190,44 @@ def create_redirect_payment(
     )
 
 
+def create_refund(
+    db: Session,
+    *,
+    provider_payment_id: str,
+    amount_rub: Decimal | float | int | str,
+    description: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    creds = get_credentials(db)
+
+    payment_id = str(provider_payment_id or "").strip()
+    if not payment_id:
+        raise AppException.validation(message="Некорректный payment_id для возврата")
+
+    payload: dict[str, Any] = {
+        "payment_id": payment_id,
+        "amount": {
+            "value": _format_amount(amount_rub),
+            "currency": "RUB",
+        },
+    }
+
+    clean_description = str(description or "").strip()
+    if clean_description:
+        payload["description"] = clean_description[:128]
+
+    if metadata:
+        payload["metadata"] = metadata
+
+    return _request_json(
+        creds,
+        method="POST",
+        path="/refunds",
+        payload=payload,
+        idempotence_key=str(uuid.uuid4()),
+    )
+
+
 def get_payment(db: Session, *, provider_payment_id: str) -> dict[str, Any]:
     creds = get_credentials(db)
     payment_id = str(provider_payment_id or "").strip()
@@ -200,4 +238,3 @@ def get_payment(db: Session, *, provider_payment_id: str) -> dict[str, Any]:
         method="GET",
         path=f"/payments/{payment_id}",
     )
-

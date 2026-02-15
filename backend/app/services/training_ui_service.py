@@ -146,6 +146,15 @@ def _get_setting_value(db: Session, key: str, default: str) -> str:
     return value or default
 
 
+def _get_cancel_hours_before_training(db: Session) -> int:
+    raw = _get_setting_value(db, "cancel_hours_before_training", "2")
+    try:
+        value = int(float(raw))
+    except Exception:
+        value = 2
+    return max(0, min(value, 168))
+
+
 def _participant_payload(enrollment: Any, *, is_reserve: bool) -> dict[str, Any]:
     user_obj = getattr(enrollment, "user", None)
     user_id = getattr(enrollment, "user_id", None)
@@ -304,12 +313,13 @@ def build_training_ui_payload(
     elif user is not None:
         user_level_name = _resolve_user_level_name(db, user)
 
-    deadline = cancel_deadline_at(training)
+    cancel_hours = _get_cancel_hours_before_training(db)
+    deadline = cancel_deadline_at(training, cancel_hours=cancel_hours)
     can_cancel = False
     if user is not None and user_enrollment_status not in ("none", "", "cancelled", "canceled"):
         can_cancel = True
 
-    late_cancel = is_late_cancel(training)
+    late_cancel = is_late_cancel(training, cancel_hours=cancel_hours)
 
     payload = {
         "occupied_main": occupied_main,

@@ -33,16 +33,24 @@ def get_training_start_at(training: Any) -> Optional[datetime]:
     return dt
 
 
-def cancel_deadline_at(training: Any) -> Optional[datetime]:
+def cancel_deadline_at(training: Any, *, cancel_hours: Optional[int] = None) -> Optional[datetime]:
     start = get_training_start_at(training)
     if start is None:
         return None
-    return start - timedelta(hours=CANCEL_DEADLINE_HOURS)
+    hours = CANCEL_DEADLINE_HOURS if cancel_hours is None else int(cancel_hours)
+    if hours < 0:
+        hours = 0
+    return start - timedelta(hours=hours)
 
 
-def is_late_cancel(training: Any, *, now: Optional[datetime] = None) -> bool:
+def is_late_cancel(
+    training: Any,
+    *,
+    now: Optional[datetime] = None,
+    cancel_hours: Optional[int] = None,
+) -> bool:
     now = now or utcnow()
-    deadline = cancel_deadline_at(training)
+    deadline = cancel_deadline_at(training, cancel_hours=cancel_hours)
     if deadline is None:
         # если у тренировки нет start_at — считаем, что “не поздно” (не штрафуем)
         return False

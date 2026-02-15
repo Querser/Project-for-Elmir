@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, Sequence
 
 from sqlalchemy.orm import Session, selectinload
@@ -11,9 +11,12 @@ from app.policies import CANCEL_MIN_DELTA
 from app.models.training import Training
 from app.models.enrollment import Enrollment, EnrollmentStatus
 from app.models.level import Level
+from app.models.payment import Payment, PaymentStatus
+from app.models.setting import Setting
 from app.models.user import User
 from app.schemas.training import CANONICAL_LEVEL_NAMES
 from app.services.ban_service import get_active_ban
+from app.services.yookassa_service import create_refund
 
 _LEVEL_ORDER = {name: idx for idx, name in enumerate(CANONICAL_LEVEL_NAMES)}
 
@@ -152,6 +155,72 @@ def _estimate_amount(training: Training, enrollment: Optional[Enrollment] = None
             if isinstance(v, (int, float)):
                 return float(v)
     return 0.0
+
+
+def _default_cancel_hours() -> int:
+    try:
+        return max(0, int(CANCEL_MIN_DELTA.total_seconds() // 3600))
+    except Exception:
+        return 2
+
+
+def _get_cancel_hours_before_training(db: Session) -> int:
+    default_hours = _default_cancel_hours()
+    try:
+        row = db.query(Setting).filter(Setting.key == "cancel_hours_before_training").one_or_none()
+    except Exception:
+        return default_hours
+
+    raw = str(getattr(row, "value", "") or "").strip() if row is not None else ""
+    if not raw:
+        return default_hours
+    try:
+        value = int(float(raw))
+    except Exception:
+        return default_hours
+    return max(0, min(value, 168))
+
+
+def _coerce_dt_to_reference_tz(dt: datetime, reference: datetime) -> datetime:
+    if reference.tzinfo is None and dt.tzinfo is not None:
+        return dt.replace(tzinfo=None)
+    if reference.tzinfo is not None and dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _refund_allowed_by_enrollment_time(
+    *,
+    enrollment: Enrollment,
+    cancel_deadline: datetime,
+    cancel_hours: int,
+) -> bool:
+    if cancel_hours <= 0:
+        return True
+
+    enrolled_at = getattr(enrollment, "created_at", None)
+    if not isinstance(enrolled_at, datetime):
+        return False
+
+    enroll_time = _coerce_dt_to_reference_tz(enrolled_at, cancel_deadline)
+    refund_cutoff = cancel_deadline - timedelta(hours=cancel_hours)
+    return enroll_time <= refund_cutoff
+
+
+def _find_latest_paid_yookassa_payment(
+    db: Session,
+    *,
+    user_id: int,
+    training_id: int,
+) -> Payment | None:
+    return (
+        db.query(Payment)
+        .filter(Payment.user_id == int(user_id), Payment.training_id == int(training_id))
+        .filter(Payment.status == PaymentStatus.PAID)
+        .filter(Payment.provider_payment_id.isnot(None))
+        .order_by(Payment.id.desc())
+        .first()
+    )
 
 
 # ---------------------------------------------------------------------
@@ -444,8 +513,47 @@ def cancel_enrollment(db: Session, *, enrollment_id: int, user_id: int) -> Enrol
         db.refresh(e)
         return e
 
+    cancel_hours = _get_cancel_hours_before_training(db)
+    cancel_deadline = start_at - timedelta(hours=cancel_hours)
     now = _now_like(start_at)
-    late = now >= (start_at - CANCEL_MIN_DELTA)
+    late = now >= cancel_deadline
+
+    paid_payment = _find_latest_paid_yookassa_payment(db, user_id=user_id, training_id=training_id)
+    enrollment_paid_flag = bool(getattr(e, "is_paid", False))
+    was_paid = enrollment_paid_flag or paid_payment is not None
+
+    if not late and paid_payment is not None:
+        refund_by_time_allowed = _refund_allowed_by_enrollment_time(
+            enrollment=e,
+            cancel_deadline=cancel_deadline,
+            cancel_hours=cancel_hours,
+        )
+
+        if refund_by_time_allowed:
+            refund_amount = getattr(paid_payment, "amount", 0) or 0
+            provider_payment_id = str(getattr(paid_payment, "provider_payment_id", "") or "").strip()
+            if refund_amount > 0 and provider_payment_id:
+                refund_obj = create_refund(
+                    db,
+                    provider_payment_id=provider_payment_id,
+                    amount_rub=refund_amount,
+                    description=f"Возврат за отмену записи #{enrollment_id}",
+                    metadata={
+                        "enrollment_id": str(enrollment_id),
+                        "training_id": str(training_id),
+                        "user_id": str(user_id),
+                    },
+                )
+                refund_status = str(refund_obj.get("status") or "").strip().lower()
+                if refund_status not in {"succeeded", "pending"}:
+                    raise AppException.conflict(
+                        message="Не удалось оформить возврат средств в ЮKassa",
+                        details={"refund": refund_obj},
+                    )
+                paid_payment.status = PaymentStatus.REFUNDED
+                db.add(paid_payment)
+                if hasattr(e, "is_paid"):
+                    setattr(e, "is_paid", False)
 
     if hasattr(e, "status"):
         setattr(e, "status", CANCELLED_LATE_STATUS() if late else CANCELLED_STATUS())
@@ -455,7 +563,7 @@ def cancel_enrollment(db: Session, *, enrollment_id: int, user_id: int) -> Enrol
 
     db.add(e)
 
-    if late:
+    if late and not was_paid:
         amount = _estimate_amount(training, e)
 
         try:
