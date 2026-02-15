@@ -203,6 +203,39 @@ function openTelegramByUsername(username) {
   }
 }
 
+const PENDING_PAYMENT_KEY_PREFIX = 'pending.yookassa.enrollment.';
+
+function getPendingPaymentStorageKey(trainingId) {
+  return `${PENDING_PAYMENT_KEY_PREFIX}${String(trainingId ?? '')}`;
+}
+
+function readPendingPaymentId(trainingId) {
+  if (!trainingId) return '';
+  try {
+    return localStorage.getItem(getPendingPaymentStorageKey(trainingId)) || '';
+  } catch {
+    return '';
+  }
+}
+
+function writePendingPaymentId(trainingId, paymentId) {
+  if (!trainingId || !paymentId) return;
+  try {
+    localStorage.setItem(getPendingPaymentStorageKey(trainingId), String(paymentId));
+  } catch {
+    // ignore
+  }
+}
+
+function clearPendingPaymentId(trainingId) {
+  if (!trainingId) return;
+  try {
+    localStorage.removeItem(getPendingPaymentStorageKey(trainingId));
+  } catch {
+    // ignore
+  }
+}
+
 export default function TrainingDetail({ trainingId, onBack, onChanged }) {
   const [training, setTraining] = useState(null);
   const [locationLabel, setLocationLabel] = useState('');
@@ -211,6 +244,9 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [pendingPaymentId, setPendingPaymentId] = useState('');
+  const [checkingPayment, setCheckingPayment] = useState(false);
+  const [paymentHint, setPaymentHint] = useState('');
 
   const [bookingOpen, setBookingOpen] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
@@ -336,6 +372,11 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trainingId]);
+
+  useEffect(() => {
+    setPendingPaymentId(readPendingPaymentId(trainingId));
+    setPaymentHint('');
   }, [trainingId]);
 
   const openParticipantProfile = (userId) => {
@@ -579,23 +620,25 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
   }, [training]);
 
   const enrollButtonLabel = useMemo(() => {
+    if (pendingPaymentId && !isEnrolled) return 'Проверить оплату';
     if (isEnrolled) return 'Отменить запись';
     if (userHasActiveBan) return 'Вы в бане';
     if (hasLevelBlock) return 'Уровень не подходит';
     if (canEnroll) return 'Записаться';
     if (canEnrollReserve && isReserveAvailable) return 'Записаться в резерв';
     return 'Запись недоступна';
-  }, [isEnrolled, userHasActiveBan, hasLevelBlock, canEnroll, canEnrollReserve, isReserveAvailable]);
+  }, [isEnrolled, pendingPaymentId, userHasActiveBan, hasLevelBlock, canEnroll, canEnrollReserve, isReserveAvailable]);
 
   const enrollButtonDisabled = useMemo(() => {
-    if (loading || saving) return true;
+    if (loading || saving || checkingPayment) return true;
     if (isEnrolled) return !canCancel;
+    if (pendingPaymentId) return false;
     if (hasLevelBlock) return true;
     if (userHasActiveBan) return false;
     if (canEnroll) return false;
     if (canEnrollReserve && isReserveAvailable) return false;
     return true;
-  }, [loading, saving, isEnrolled, canCancel, hasLevelBlock, userHasActiveBan, canEnroll, canEnrollReserve, isReserveAvailable]);
+  }, [loading, saving, checkingPayment, isEnrolled, canCancel, pendingPaymentId, hasLevelBlock, userHasActiveBan, canEnroll, canEnrollReserve, isReserveAvailable]);
 
   const priceLabel = useMemo(() => {
     const p = training?.final_price ?? training?.price;
@@ -604,10 +647,76 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
     return `${Math.round(n)} ₽`;
   }, [training]);
 
+  const checkPaymentStatus = async ({ silent = false } = {}) => {
+    if (!trainingId || !pendingPaymentId) return;
+
+    try {
+      setCheckingPayment(true);
+      if (!silent) setError('');
+
+      const result = await apiFetch(`/api/v1/payments/enrollments/${encodeURIComponent(pendingPaymentId)}/status`);
+      const status = String(result?.status || '').toLowerCase();
+      const cancellationReason = String(result?.cancellation_reason || '').trim();
+
+      if (status === 'succeeded') {
+        clearPendingPaymentId(trainingId);
+        setPendingPaymentId('');
+        setPaymentHint('Оплата подтверждена. Запись обновлена.');
+        await load();
+        onChanged?.();
+        return;
+      }
+
+      if (status === 'canceled') {
+        clearPendingPaymentId(trainingId);
+        setPendingPaymentId('');
+        setPaymentHint('');
+        if (!silent) {
+          const reasonSuffix = cancellationReason ? ` (${cancellationReason})` : '';
+          setError(`Оплата отменена${reasonSuffix}`);
+        }
+        return;
+      }
+
+      setPaymentHint('Платеж еще в обработке. Повторите проверку через несколько секунд.');
+    } catch (err) {
+      if (!silent) {
+        setError(err?.message || 'Не удалось проверить статус оплаты');
+      }
+    } finally {
+      setCheckingPayment(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!pendingPaymentId || !trainingId || isEnrolled) return;
+    let cancelled = false;
+    (async () => {
+      if (cancelled) return;
+      await checkPaymentStatus({ silent: true });
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingPaymentId, trainingId, isEnrolled]);
+
+  useEffect(() => {
+    if (!isEnrolled || !trainingId) return;
+    clearPendingPaymentId(trainingId);
+    setPendingPaymentId('');
+    setPaymentHint('');
+  }, [isEnrolled, trainingId]);
+
   const openEnrollFlow = () => {
     if (isEnrolled) {
       if (!canCancel) return;
       setCancelOpen(true);
+      return;
+    }
+
+    if (pendingPaymentId) {
+      checkPaymentStatus();
       return;
     }
 
@@ -629,23 +738,41 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
     if (!trainingId) return;
     try {
       setSaving(true);
+      setError('');
+      setPaymentHint('');
 
       const payload = {
         training_id: trainingId,
-        is_paid: false,
       };
 
       const tierId = training?.picked_price_tier_id ?? null;
       if (tierId != null) payload.price_tier_id = tierId;
 
-      await apiFetch('/api/v1/enrollments', {
+      try {
+        const returnUrl = new URL(window.location.href);
+        returnUrl.searchParams.set('training_id', String(trainingId));
+        returnUrl.searchParams.set('payment_result', '1');
+        payload.return_url = returnUrl.toString();
+      } catch {
+        // fallback: backend will use default return_url
+      }
+
+      const checkout = await apiFetch('/api/v1/payments/enrollments/checkout', {
         method: 'POST',
         body: payload,
       });
+      const createdPaymentId = String(checkout?.payment_id || '').trim();
+      const confirmationUrl = String(checkout?.confirmation_url || '').trim();
 
+      if (!createdPaymentId || !confirmationUrl) {
+        throw new Error('Не удалось получить ссылку на оплату');
+      }
+
+      writePendingPaymentId(trainingId, createdPaymentId);
+      setPendingPaymentId(createdPaymentId);
+      setPaymentHint('Откройте страницу оплаты и после оплаты вернитесь для проверки статуса.');
       setBookingOpen(false);
-      await load();
-      onChanged?.();
+      openExternalLink(confirmationUrl);
     } catch (err) {
       setError(err?.message || 'Не удалось записаться');
     } finally {
@@ -913,10 +1040,19 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
                   {userLevelBlockReason}
                 </p>
               ) : null}
+              {pendingPaymentId ? (
+                <p className="hint" style={{ color: 'var(--primary)' }}>
+                  {paymentHint || 'У вас есть незавершенный платеж. Нажмите кнопку ниже, чтобы проверить статус.'}
+                </p>
+              ) : null}
             </div>
 
             <button className="primary-btn" type="button" onClick={openEnrollFlow} disabled={enrollButtonDisabled}>
-              {saving ? 'Подождите…' : enrollButtonLabel}
+              {saving
+                ? '\u041f\u043e\u0434\u043e\u0436\u0434\u0438\u0442\u0435\u2026'
+                : checkingPayment
+                  ? '\u041f\u0440\u043e\u0432\u0435\u0440\u044f\u0435\u043c \u043e\u043f\u043b\u0430\u0442\u0443\u2026'
+                  : enrollButtonLabel}
             </button>
             {isEnrolled && calendarHref ? (
               <button
@@ -981,7 +1117,7 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
                 Отмена
               </button>
               <button className="primary-btn" type="button" onClick={doEnroll} disabled={saving}>
-                Записаться
+                {'\u041f\u0435\u0440\u0435\u0439\u0442\u0438 \u043a \u043e\u043f\u043b\u0430\u0442\u0435'}
               </button>
             </div>
           </div>

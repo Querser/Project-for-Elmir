@@ -58,6 +58,7 @@ services:
       # --- Payments ---
       PAYMENT_PROVIDER_KEY: ${PAYMENT_PROVIDER_KEY:-}
       PAYMENT_PROVIDER_SECRET: ${PAYMENT_PROVIDER_SECRET:-}
+      PAYMENT_RETURN_URL: ${PAYMENT_RETURN_URL:-}
 
       # --- Postgres vars ---
       POSTGRES_USER: ${POSTGRES_USER:-postgres}

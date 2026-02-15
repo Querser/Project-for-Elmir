@@ -24,6 +24,32 @@ const TAB_MORE = 'more';
 
 const LS_THEME = 'ui.theme';
 
+function readTrainingIdFromUrl() {
+  if (typeof window === 'undefined') return null;
+  try {
+    const url = new URL(window.location.href);
+    const raw = url.searchParams.get('training_id');
+    if (!raw) return null;
+    const value = Number(raw);
+    return Number.isFinite(value) && value > 0 ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function clearPaymentQueryParams() {
+  if (typeof window === 'undefined') return;
+  try {
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has('training_id') && !url.searchParams.has('payment_result')) return;
+    url.searchParams.delete('training_id');
+    url.searchParams.delete('payment_result');
+    window.history.replaceState(null, '', url.toString());
+  } catch {
+    // ignore
+  }
+}
+
 export default function App() {
   const tg = useMemo(() => {
     return typeof window !== 'undefined' ? window.Telegram?.WebApp : null;
@@ -59,6 +85,14 @@ export default function App() {
     initTelegramAuth().catch(() => {
       // в dev-режимах / без Telegram это нормально
     });
+  }, []);
+
+  useEffect(() => {
+    const trainingId = readTrainingIdFromUrl();
+    if (!trainingId) return;
+    setActiveTab(TAB_SCHEDULE);
+    setOverlay({ type: 'training', payload: { trainingId } });
+    clearPaymentQueryParams();
   }, []);
 
   useEffect(() => {
