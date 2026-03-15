@@ -29,7 +29,7 @@ from app.services.user_service import get_or_create_user_from_telegram
 log = logging.getLogger("app.telegram.bot")
 
 
-BOT_BTN_OPEN_APP = "Открыть Mini App"
+BOT_BTN_OPEN_APP = "MosVolley"
 BOT_BTN_OPEN_ADMIN = "Открыть Админ-панель"
 BOT_BTN_NOTIFICATIONS = "Уведомления"
 BOT_BTN_CONTACTS = "Контакты"
@@ -438,7 +438,7 @@ def _send_profile_prompt(db: Session, user: User) -> None:
         send_bot_message_to_user(
             telegram_id=tg_id,
             text=(
-                "Для входа в Mini App нужен ваш телефон.\n"
+                "Для входа в MosVolley нужен ваш телефон.\n"
                 "Нажмите кнопку ниже «Поделиться номером телефона»."
             ),
             reply_markup=_contact_request_keyboard(),
@@ -500,7 +500,7 @@ def _send_main_menu(db: Session, user: User) -> None:
     send_bot_message_to_user(
         telegram_id=tg_id,
         text=(
-            "Профиль готов. Вы можете открыть Mini App, смотреть уведомления,"
+            "Профиль готов. Вы можете открыть MosVolley, смотреть уведомления,"
             " контакты, правила и акции."
         ),
         reply_markup=keyboard,

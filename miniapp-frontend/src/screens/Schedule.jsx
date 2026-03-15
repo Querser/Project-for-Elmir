@@ -265,6 +265,7 @@ export default function Schedule({
 
   const [selectedDay, setSelectedDay] = useState(() => dateKeyLocal(today));
   const weekStripRef = useRef(null);
+  const userPickedDayRef = useRef(false);
 
   const effectiveRefresh = refreshTick ?? refreshKey ?? 0;
 
@@ -376,6 +377,8 @@ export default function Schedule({
   // If there are trainings in the loaded range but none for "today",
   // auto-select the nearest day with at least one training.
   useEffect(() => {
+    if (userPickedDayRef.current) return;
+
     const todayKey = dateKeyLocal(today);
     if (selectedDay !== todayKey) return;
     if (!Array.isArray(trainingsFiltered) || trainingsFiltered.length === 0) return;
@@ -446,7 +449,10 @@ export default function Schedule({
               key={key}
               type="button"
               className={`week-day ${isSelected ? 'active' : ''}`}
-              onClick={() => setSelectedDay(key)}
+              onClick={() => {
+                userPickedDayRef.current = true;
+                setSelectedDay(key);
+              }}
               data-day={key}
             >
               <span>{d.toLocaleDateString('ru-RU', { weekday: 'short' }).toUpperCase()}</span>
