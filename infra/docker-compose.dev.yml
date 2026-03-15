@@ -44,6 +44,7 @@ services:
 
       # --- Telegram ---
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_BOT_NAME: ${TELEGRAM_BOT_NAME:-MosVolley}
       TELEGRAM_WEBAPP_URL: ${TELEGRAM_WEBAPP_URL:-http://localhost:8080/}
       TELEGRAM_ADMIN_WEBAPP_URL: ${TELEGRAM_ADMIN_WEBAPP_URL:-http://localhost:8080/admin/}
       TELEGRAM_WEBHOOK_URL: ${TELEGRAM_WEBHOOK_URL:-}

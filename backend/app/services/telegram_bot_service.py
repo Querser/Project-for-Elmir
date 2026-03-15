@@ -194,17 +194,29 @@ def ensure_telegram_branding() -> None:
             me = _bot_api.get_me()
             current = ((me.get("result") or {}).get("first_name") or "").strip()
             if current and current != desired_name:
-                _bot_api.set_my_name(name=desired_name)
+                ok = _bot_api.set_my_name(name=desired_name)
+                if ok:
+                    log.info("Telegram branding: bot name updated to %r", desired_name)
+                else:
+                    log.warning("Telegram branding: failed to update bot name to %r", desired_name)
             elif not current:
                 # If we can't read current name, still try to set.
-                _bot_api.set_my_name(name=desired_name)
+                ok = _bot_api.set_my_name(name=desired_name)
+                if ok:
+                    log.info("Telegram branding: bot name ensured to %r", desired_name)
+                else:
+                    log.warning("Telegram branding: failed to ensure bot name to %r", desired_name)
         except Exception:
             log.exception("Telegram branding: failed to ensure bot name")
 
     miniapp_url = (settings.telegram_webapp_url or "").strip()
     if miniapp_url:
         try:
-            _bot_api.set_chat_menu_button(text=BOT_BTN_OPEN_APP, url=miniapp_url)
+            ok = _bot_api.set_chat_menu_button(text=BOT_BTN_OPEN_APP, url=miniapp_url)
+            if ok:
+                log.info("Telegram branding: chat menu button ensured")
+            else:
+                log.warning("Telegram branding: failed to ensure chat menu button")
         except Exception:
             log.exception("Telegram branding: failed to ensure chat menu button")
 

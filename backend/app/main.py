@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -143,9 +144,14 @@ def _startup() -> None:
     _run_migrations()
     _run_payments_retention_cleanup()
     try:
+        # Do not block app startup on Telegram API calls.
         from app.services.telegram_bot_service import ensure_telegram_branding
 
-        ensure_telegram_branding()
+        threading.Thread(
+            target=ensure_telegram_branding,
+            name="telegram-branding",
+            daemon=True,
+        ).start()
     except Exception:
         logger.exception("Telegram branding init failed")
 
