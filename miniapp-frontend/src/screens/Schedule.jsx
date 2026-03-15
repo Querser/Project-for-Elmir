@@ -373,6 +373,38 @@ export default function Schedule({
       .sort((a, b) => (parseStartAt(a)?.getTime() || 0) - (parseStartAt(b)?.getTime() || 0));
   }, [trainingsFiltered, selectedDay]);
 
+  // If there are trainings in the loaded range but none for "today",
+  // auto-select the nearest day with at least one training.
+  useEffect(() => {
+    const todayKey = dateKeyLocal(today);
+    if (selectedDay !== todayKey) return;
+    if (!Array.isArray(trainingsFiltered) || trainingsFiltered.length === 0) return;
+
+    const keys = new Map();
+    for (const t of trainingsFiltered) {
+      const dt = parseStartAt(t);
+      if (!dt) continue;
+      const key = dateKeyLocal(dt);
+      if (!key || keys.has(key)) continue;
+      keys.set(key, startOfDay(dt).getTime());
+    }
+    if (!keys.size) return;
+    if (keys.has(selectedDay)) return;
+
+    const todayMs = startOfDay(today).getTime();
+    const dayList = Array.from(keys.entries())
+      .map(([key, ms]) => ({ key, ms: Number(ms) }))
+      .filter((x) => Number.isFinite(x.ms))
+      .sort((a, b) => a.ms - b.ms);
+    if (!dayList.length) return;
+
+    const upcoming = dayList.find((x) => x.ms >= todayMs) || null;
+    const picked = upcoming || dayList[dayList.length - 1];
+    if (picked?.key && picked.key !== selectedDay) {
+      setSelectedDay(picked.key);
+    }
+  }, [selectedDay, today, trainingsFiltered]);
+
   const dayLabel = useMemo(() => {
     const found = daysRange.find((d) => dateKeyLocal(d) === selectedDay) || dateFromKey(selectedDay) || new Date();
     return capFirst(found.toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' }));
