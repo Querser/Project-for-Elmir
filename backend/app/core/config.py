@@ -60,6 +60,7 @@ class Settings(BaseModel):
     environment: str = _env_str("ENVIRONMENT", "development")
 
     telegram_bot_token: str = _env_str("TELEGRAM_BOT_TOKEN", "")
+    telegram_bot_name: str = _env_str("TELEGRAM_BOT_NAME", "MosVolley")
     telegram_webapp_url: str = _env_str("TELEGRAM_WEBAPP_URL", "")
     telegram_admin_webapp_url: str = _env_str("TELEGRAM_ADMIN_WEBAPP_URL", "")
     telegram_webhook_url: str = _env_str("TELEGRAM_WEBHOOK_URL", "")

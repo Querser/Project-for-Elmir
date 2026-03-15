@@ -136,6 +136,29 @@ class TelegramBotAPI:
             return None
         return f"https://api.telegram.org/file/bot{self.token}/{file_path}"
 
+    def get_me(self) -> dict[str, Any]:
+        return self._call("getMe", {})
+
+    def set_my_name(self, *, name: str, language_code: str = "") -> bool:
+        payload: dict[str, Any] = {"name": str(name)}
+        if language_code:
+            payload["language_code"] = str(language_code)
+        result = self._call("setMyName", payload)
+        return bool(result.get("ok"))
+
+    def set_chat_menu_button(self, *, chat_id: int | None = None, text: str, url: str) -> bool:
+        payload: dict[str, Any] = {
+            "menu_button": {
+                "type": "web_app",
+                "text": str(text),
+                "web_app": {"url": str(url)},
+            }
+        }
+        if chat_id is not None:
+            payload["chat_id"] = int(chat_id)
+        result = self._call("setChatMenuButton", payload)
+        return bool(result.get("ok"))
+
     def set_webhook(self, *, url: str, secret_token: str = "") -> dict[str, Any]:
         payload: dict[str, Any] = {"url": url}
         if secret_token:
@@ -147,6 +170,45 @@ class TelegramBotAPI:
 
 
 _bot_api = TelegramBotAPI()
+_branding_applied = False
+
+
+def ensure_telegram_branding() -> None:
+    """
+    Telegram UI "header" in Mini App shows the bot's display name.
+    We also set bot's persistent menu button to open the miniapp with correct label.
+
+    This is best-effort and safe to call multiple times.
+    """
+    global _branding_applied
+    if _branding_applied:
+        return
+    if not _bot_api.enabled:
+        return
+
+    settings = get_settings()
+
+    desired_name = (getattr(settings, "telegram_bot_name", "") or "").strip()
+    if desired_name:
+        try:
+            me = _bot_api.get_me()
+            current = ((me.get("result") or {}).get("first_name") or "").strip()
+            if current and current != desired_name:
+                _bot_api.set_my_name(name=desired_name)
+            elif not current:
+                # If we can't read current name, still try to set.
+                _bot_api.set_my_name(name=desired_name)
+        except Exception:
+            log.exception("Telegram branding: failed to ensure bot name")
+
+    miniapp_url = (settings.telegram_webapp_url or "").strip()
+    if miniapp_url:
+        try:
+            _bot_api.set_chat_menu_button(text=BOT_BTN_OPEN_APP, url=miniapp_url)
+        except Exception:
+            log.exception("Telegram branding: failed to ensure chat menu button")
+
+    _branding_applied = True
 
 
 def _normalize_text(value: str | None) -> str:

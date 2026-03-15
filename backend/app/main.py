@@ -142,6 +142,12 @@ app.mount("/media", StaticFiles(directory=str(media_root)), name="media")
 def _startup() -> None:
     _run_migrations()
     _run_payments_retention_cleanup()
+    try:
+        from app.services.telegram_bot_service import ensure_telegram_branding
+
+        ensure_telegram_branding()
+    except Exception:
+        logger.exception("Telegram branding init failed")
 
 
 app.add_middleware(
