@@ -151,7 +151,7 @@ export default function More({ darkMode, onToggleDarkMode, onOpenProfile }) {
 
   const name = useMemo(() => formatName(profile), [profile]);
   const subtitle = useMemo(() => {
-    if (!rating) return 'Добро пожаловать в UfaVolley';
+    if (!rating) return 'Добро пожаловать в MosVolley';
     const cups = rating?.cups ?? 0;
     const pos = rating?.position ?? rating?.place ?? '—';
     const total = rating?.total_users ?? rating?.total ?? '—';
