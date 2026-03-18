@@ -58,6 +58,31 @@ def _normalize_json(v: Any) -> Any:
     return v
 
 
+def _normalize_media_url_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        source = list(value)
+    else:
+        source = [value]
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in source:
+        text = str(item or '').strip()
+        if not text or text in seen:
+            continue
+        normalized.append(text)
+        seen.add(text)
+    return normalized
+
+
+def _apply_no_store_headers(response: Response) -> None:
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+
+
 def _price_tier_to_dict(pt: Any) -> dict[str, Any]:
     return {
         'id': getattr(pt, 'id', None),
@@ -88,6 +113,14 @@ def _training_to_dict(t: Any) -> dict[str, Any]:
         }
         location_name = location_payload.get('name') or location_payload.get('address')
 
+    image_urls = _normalize_media_url_list(getattr(t, 'image_urls', None))
+    image_url = (getattr(t, 'image_url', None) or '').strip() or None
+    if image_url:
+        if image_url not in image_urls:
+            image_urls = [image_url, *image_urls]
+    elif image_urls:
+        image_url = image_urls[0]
+
     return {
         'id': getattr(t, 'id', None),
         'title': getattr(t, 'title', ''),
@@ -102,7 +135,8 @@ def _training_to_dict(t: Any) -> dict[str, Any]:
         'training_type': getattr(t, 'training_type', None),
         'amplua_positions': getattr(t, 'amplua_positions', None),
         'coach_name': getattr(t, 'coach_name', None),
-        'image_url': getattr(t, 'image_url', None),
+        'image_url': image_url,
+        'image_urls': image_urls,
         'video_url': getattr(t, 'video_url', None),
         'location_id': getattr(t, 'location_id', None),
         'location_name': location_name,
@@ -195,6 +229,7 @@ def _actor_payload(actor: Any) -> tuple[int | None, str]:
 @router.get('/admin', response_model=TrainingsPageUI)
 def list_admin_trainings(
     request: Request,
+    response: Response,
     db: Session = Depends(get_db),
     _: Any = Depends(get_current_admin_user_any),
     skip: int = Query(0, ge=0),
@@ -209,6 +244,7 @@ def list_admin_trainings(
     is_cancelled: bool | None = Query(None),
     order: str = Query('asc', pattern='^(asc|desc)$'),
 ):
+    _apply_no_store_headers(response)
     items, total = list_trainings(
         db,
         q=q,
@@ -235,9 +271,11 @@ def list_admin_trainings(
 def get_admin_training(
     training_id: int,
     request: Request,
+    response: Response,
     db: Session = Depends(get_db),
     _: Any = Depends(get_current_admin_user_any),
 ):
+    _apply_no_store_headers(response)
     training = get_training_or_404(db=db, training_id=training_id)
     return _to_training_read_ui_payload(db, training, None, request=request, include_participants=True)
 
@@ -279,9 +317,11 @@ async def upload_training_media(
 def create_training_admin(
     payload: TrainingCreate,
     request: Request,
+    response: Response,
     db: Session = Depends(get_db),
     _: Any = Depends(get_current_admin_user_any),
 ):
+    _apply_no_store_headers(response)
     created = create_training(db=db, data=payload)
     return _to_training_read_ui_payload(db, created, None, request=request, include_participants=True)
 
@@ -291,9 +331,11 @@ def update_training_admin(
     training_id: int,
     payload: TrainingUpdate,
     request: Request,
+    response: Response,
     db: Session = Depends(get_db),
     _: Any = Depends(get_current_admin_user_any),
 ):
+    _apply_no_store_headers(response)
     training = get_training_or_404(db=db, training_id=training_id)
     updated = update_training(db=db, training=training, data=payload)
     return _to_training_read_ui_payload(db, updated, None, request=request, include_participants=True)
@@ -367,6 +409,7 @@ def export_training_participants_admin(
 @router.get('', response_model=TrainingsPageUI)
 def list_public_trainings(
     request: Request,
+    response: Response,
     db: Session = Depends(get_db),
     user: Any | None = Depends(get_current_user_optional),
     skip: int = Query(0, ge=0),
@@ -374,6 +417,7 @@ def list_public_trainings(
     date_from: datetime | None = Query(None),
     date_to: datetime | None = Query(None),
 ):
+    _apply_no_store_headers(response)
     now_utc = datetime.now(timezone.utc)
     effective_date_from = date_from if date_from is not None else now_utc
 
@@ -416,9 +460,11 @@ def get_training_calendar_ics(
 def get_public_training(
     training_id: int,
     request: Request,
+    response: Response,
     db: Session = Depends(get_db),
     user: Any | None = Depends(get_current_user_optional),
 ):
+    _apply_no_store_headers(response)
     training = get_training_or_404(db=db, training_id=training_id)
 
     if bool(getattr(training, 'is_cancelled', False)):

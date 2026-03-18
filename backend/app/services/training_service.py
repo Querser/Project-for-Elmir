@@ -58,6 +58,53 @@ def normalize_amplua_positions(value: Any) -> dict[str, int]:
     return normalized
 
 
+def amplua_capacity_main(value: Any) -> int:
+    positions = normalize_amplua_positions(value)
+    return int(sum(max(0, int(v)) for v in positions.values()))
+
+
+def normalize_media_url(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def normalize_media_url_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        source = list(value)
+    else:
+        source = [value]
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in source:
+        url = normalize_media_url(item)
+        if not url or url in seen:
+            continue
+        normalized.append(url)
+        seen.add(url)
+    return normalized
+
+
+def merge_image_gallery(
+    *,
+    image_url: Any,
+    image_urls: Any,
+) -> tuple[str | None, list[str] | None]:
+    primary = normalize_media_url(image_url)
+    gallery = normalize_media_url_list(image_urls)
+
+    if primary:
+        gallery = [primary] + [url for url in gallery if url != primary]
+    elif gallery:
+        primary = gallery[0]
+
+    return primary, (gallery or None)
+
+
 def get_amplua_position_label(position_key: str | None) -> str:
     key = str(position_key or "").strip()
     for spec in AMPLUA_POSITION_SPECS:
@@ -172,6 +219,21 @@ def create_training(db: Session, data: TrainingCreate) -> Training:
         location_name=getattr(data, 'location_name', None),
     )
 
+    normalized_training_type = normalize_training_type(getattr(data, "training_type", None))
+    normalized_positions = normalize_amplua_positions(getattr(data, "amplua_positions", None))
+    if normalized_training_type != AMPLUA_TRAINING_TYPE:
+        normalized_positions = {}
+
+    resolved_capacity_main = (
+        amplua_capacity_main(normalized_positions)
+        if normalized_training_type == AMPLUA_TRAINING_TYPE
+        else max(0, int(getattr(data, "capacity_main", 0) or 0))
+    )
+    primary_image_url, image_gallery = merge_image_gallery(
+        image_url=getattr(data, "image_url", None),
+        image_urls=getattr(data, "image_urls", None),
+    )
+
     training = Training(
         title=data.title,
         description=data.description,
@@ -180,12 +242,13 @@ def create_training(db: Session, data: TrainingCreate) -> Training:
         min_level_name=data.min_level_name,
         max_level_name=data.max_level_name,
         price=data.price,
-        capacity_main=data.capacity_main,
+        capacity_main=resolved_capacity_main,
         capacity_reserve=data.capacity_reserve,
-        training_type=normalize_training_type(getattr(data, "training_type", None)),
-        amplua_positions=normalize_amplua_positions(getattr(data, "amplua_positions", None)),
+        training_type=normalized_training_type,
+        amplua_positions=normalized_positions or None,
         coach_name=data.coach_name,
-        image_url=data.image_url,
+        image_url=primary_image_url,
+        image_urls=image_gallery,
         video_url=data.video_url,
         location_id=resolved_location_id,
         is_cancelled=False,
@@ -208,11 +271,31 @@ def update_training(db: Session, training: Training, data: TrainingUpdate) -> Tr
             location_name=location_name,
         )
 
+    current_training_type = normalize_training_type(getattr(training, 'training_type', None))
+    next_training_type = current_training_type
     if 'training_type' in update_data:
-        update_data['training_type'] = normalize_training_type(update_data.get('training_type'))
+        next_training_type = normalize_training_type(update_data.get('training_type'))
+        update_data['training_type'] = next_training_type
 
     if 'amplua_positions' in update_data:
         update_data['amplua_positions'] = normalize_amplua_positions(update_data.get('amplua_positions'))
+
+    if next_training_type == AMPLUA_TRAINING_TYPE:
+        next_positions = normalize_amplua_positions(
+            update_data.get('amplua_positions', getattr(training, 'amplua_positions', None))
+        )
+        update_data['amplua_positions'] = next_positions
+        update_data['capacity_main'] = amplua_capacity_main(next_positions)
+    elif 'training_type' in update_data and next_training_type != AMPLUA_TRAINING_TYPE:
+        update_data['amplua_positions'] = None
+
+    if 'image_url' in update_data or 'image_urls' in update_data:
+        merged_primary, merged_gallery = merge_image_gallery(
+            image_url=update_data.get('image_url', getattr(training, 'image_url', None)),
+            image_urls=update_data.get('image_urls', getattr(training, 'image_urls', None)),
+        )
+        update_data['image_url'] = merged_primary
+        update_data['image_urls'] = merged_gallery
 
     next_min_level = update_data.get('min_level_name', getattr(training, 'min_level_name', None))
     next_max_level = update_data.get('max_level_name', getattr(training, 'max_level_name', None))

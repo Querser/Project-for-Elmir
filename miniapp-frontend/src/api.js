@@ -150,11 +150,17 @@ async function request(path, options = {}) {
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      const res = await fetch(url, {
+      const fetchOptions = {
         method,
         headers,
         body: method === 'GET' || method === 'HEAD' ? undefined : body,
-      });
+      };
+
+      if (method === 'GET' || method === 'HEAD') {
+        fetchOptions.cache = 'no-store';
+      }
+
+      const res = await fetch(url, fetchOptions);
 
       const ct = res.headers.get('content-type') || '';
       const raw = await res.text();

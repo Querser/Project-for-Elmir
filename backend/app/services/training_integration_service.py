@@ -49,6 +49,11 @@ def _get_lat_lon(training: Any) -> tuple[float | None, float | None]:
     return lat, lon
 
 
+def _fmt_coord(value: float) -> str:
+    # Убираем хвостовые нули, сохраняя корректный формат для deep-link.
+    return f"{value:.8f}".rstrip("0").rstrip(".")
+
+
 def build_yandex_map_payload(training: Any) -> dict[str, Any]:
     label = _get_location_label(training)
     lat, lon = _get_lat_lon(training)
@@ -64,15 +69,18 @@ def build_yandex_map_payload(training: Any) -> dict[str, Any]:
     }
 
     if lat is not None and lon is not None:
-        ll = f"{lon},{lat}"
+        lat_text = _fmt_coord(lat)
+        lon_text = _fmt_coord(lon)
+        ll = f"{lon_text},{lat_text}"
+        route_target = quote_plus(f"{lat_text},{lon_text}")
         exact_url = (
             f"https://yandex.ru/maps/?ll={quote_plus(ll)}"
             f"&pt={quote_plus(ll)},pm2rdm&z=17&mode=whatshere"
         )
         payload["open_url"] = exact_url
         payload["route_url"] = (
-            f"https://yandex.ru/maps/?mode=routes&rtext=~{lat},{lon}&rtt=auto"
-            f"&ll={quote_plus(ll)}&z=17"
+            f"https://yandex.ru/maps/?mode=routes&rtext=~{route_target}&rtt=auto"
+            f"&ll={quote_plus(ll)}&pt={quote_plus(ll)},pm2rdm&z=17"
         )
         payload["widget_url"] = f"https://yandex.ru/map-widget/v1/?ll={quote_plus(ll)}&z=15&pt={quote_plus(ll)},pm2rdm&lang=ru_RU"
         return payload
@@ -81,7 +89,7 @@ def build_yandex_map_payload(training: Any) -> dict[str, Any]:
         encoded = quote_plus(label)
         exact_url = f"https://yandex.ru/maps/?text={encoded}&mode=whatshere"
         payload["open_url"] = exact_url
-        payload["route_url"] = f"https://yandex.ru/maps/?mode=routes&rtext=~{encoded}&rtt=auto"
+        payload["route_url"] = f"https://yandex.ru/maps/?mode=routes&rtext=~{encoded}&rtt=auto&text={encoded}"
         payload["widget_url"] = f"https://yandex.ru/map-widget/v1/?text={encoded}&z=15&lang=ru_RU"
 
     return payload

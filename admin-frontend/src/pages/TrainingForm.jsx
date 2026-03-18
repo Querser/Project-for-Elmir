@@ -52,6 +52,33 @@ function normalizeNumber(value, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function normalizeMediaUrl(value) {
+  const text = String(value || '').trim();
+  return text || '';
+}
+
+function normalizeMediaUrlList(value) {
+  const source = Array.isArray(value) ? value : [value];
+  const seen = new Set();
+  const result = [];
+  source.forEach((item) => {
+    const url = normalizeMediaUrl(item);
+    if (!url || seen.has(url)) return;
+    seen.add(url);
+    result.push(url);
+  });
+  return result;
+}
+
+function parseImageUrlsText(value) {
+  return normalizeMediaUrlList(
+    String(value || '')
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean),
+  );
+}
+
 function locationLabel(location) {
   const title = location?.name || `Локация #${location?.id ?? '—'}`;
   const details = [location?.metro, location?.address].filter(Boolean).join(' • ');
@@ -150,10 +177,11 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
     coach_name: '',
     location_name: '',
     image_url: '',
+    image_urls_text: '',
     video_url: '',
   });
 
-  const [imageFile, setImageFile] = useState(null);
+  const [imageFiles, setImageFiles] = useState([]);
   const [videoFile, setVideoFile] = useState(null);
   const [removeImage, setRemoveImage] = useState(false);
   const [removeVideo, setRemoveVideo] = useState(false);
@@ -164,6 +192,10 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
   const [errors, setErrors] = useState({});
   const canSave = useMemo(() => !busy && !loading, [busy, loading]);
   const isAmplua = isAmpluaTrainingType(form.training_type);
+  const ampluaMainCapacity = useMemo(() => {
+    const positions = normalizeAmpluaPositions(form.amplua_positions);
+    return Object.values(positions).reduce((acc, value) => acc + Number(value || 0), 0);
+  }, [form.amplua_positions]);
 
   function setField(name, value) {
     setForm((prev) => ({ ...prev, [name]: value }));
@@ -215,16 +247,18 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
       nextErrors.price = 'Стоимость может содержать максимум 2 знака после запятой';
     }
 
-    const capMainRaw = String(form.capacity_main ?? '').trim();
-    const capMain = Number(capMainRaw);
-    if (!capMainRaw) {
-      nextErrors.capacity_main = 'Укажите вместимость основы';
-    } else if (!Number.isFinite(capMain) || !Number.isInteger(capMain)) {
-      nextErrors.capacity_main = 'Вместимость основы должна быть целым числом';
-    } else if (capMain < 0) {
-      nextErrors.capacity_main = 'Вместимость основы не может быть отрицательной';
-    } else if (capMain > 1000) {
-      nextErrors.capacity_main = 'Слишком большая вместимость основы (максимум 1000)';
+    if (!isAmplua) {
+      const capMainRaw = String(form.capacity_main ?? '').trim();
+      const capMain = Number(capMainRaw);
+      if (!capMainRaw) {
+        nextErrors.capacity_main = 'Укажите вместимость основы';
+      } else if (!Number.isFinite(capMain) || !Number.isInteger(capMain)) {
+        nextErrors.capacity_main = 'Вместимость основы должна быть целым числом';
+      } else if (capMain < 0) {
+        nextErrors.capacity_main = 'Вместимость основы не может быть отрицательной';
+      } else if (capMain > 1000) {
+        nextErrors.capacity_main = 'Слишком большая вместимость основы (максимум 1000)';
+      }
     }
 
     const capReserveRaw = String(form.capacity_reserve ?? '').trim();
@@ -274,10 +308,10 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
       nextErrors.description = 'Описание слишком длинное (максимум 500 символов)';
     }
 
-    if (imageFile && !String(imageFile.type || '').startsWith('image/')) {
+    if (imageFiles.some((file) => !String(file?.type || '').startsWith('image/'))) {
       nextErrors.image_file = 'Загрузите файл изображения (image/*)';
     }
-    if (imageFile && imageFile.size > MAX_UPLOAD_MB * 1024 * 1024) {
+    if (imageFiles.some((file) => Number(file?.size || 0) > MAX_UPLOAD_MB * 1024 * 1024)) {
       nextErrors.image_file = `Изображение слишком большое (максимум ${MAX_UPLOAD_MB} МБ)`;
     }
 
@@ -288,8 +322,12 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
       nextErrors.video_file = `Видео слишком большое (максимум ${MAX_UPLOAD_MB} МБ)`;
     }
 
-    if (!imageFile && form.image_url && !MEDIA_URL_RE.test(String(form.image_url).trim())) {
+    if (!imageFiles.length && form.image_url && !MEDIA_URL_RE.test(String(form.image_url).trim())) {
       nextErrors.image_url = 'Некорректная ссылка на изображение';
+    }
+    const extraImageUrls = parseImageUrlsText(form.image_urls_text);
+    if (extraImageUrls.some((url) => !MEDIA_URL_RE.test(url))) {
+      nextErrors.image_urls_text = 'Некорректная ссылка в дополнительных фото';
     }
     if (!videoFile && form.video_url && !MEDIA_URL_RE.test(String(form.video_url).trim())) {
       nextErrors.video_url = 'Некорректная ссылка на видео';
@@ -312,6 +350,10 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
     if (fromState && String(fromState.id) === String(trainingId)) {
       const locationId = fromState.location_id != null ? String(fromState.location_id) : '';
       const locationName = fromState.location_name || '';
+      const imageUrls = normalizeMediaUrlList([
+        fromState.image_url || '',
+        ...(Array.isArray(fromState.image_urls) ? fromState.image_urls : []),
+      ]);
       setForm({
         title: fromState.title || '',
         description: fromState.description || '',
@@ -326,7 +368,8 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
         amplua_positions: normalizeAmpluaPositions(fromState.amplua_positions),
         coach_name: fromState.coach_name || '',
         location_name: locationId ? '' : locationName,
-        image_url: fromState.image_url || '',
+        image_url: imageUrls[0] || '',
+        image_urls_text: imageUrls.slice(1).join('\n'),
         video_url: fromState.video_url || '',
       });
       setSelectedLocationId(locationId);
@@ -339,6 +382,10 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
       const data = await apiFetchJson(`/trainings/admin/${trainingId}`, { auth: true });
       const locationId = data.location_id != null ? String(data.location_id) : '';
       const locationName = data.location_name || '';
+      const imageUrls = normalizeMediaUrlList([
+        data.image_url || '',
+        ...(Array.isArray(data.image_urls) ? data.image_urls : []),
+      ]);
       setForm({
         title: data.title || '',
         description: data.description || '',
@@ -353,7 +400,8 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
         amplua_positions: normalizeAmpluaPositions(data.amplua_positions),
         coach_name: data.coach_name || '',
         location_name: locationId ? '' : locationName,
-        image_url: data.image_url || '',
+        image_url: imageUrls[0] || '',
+        image_urls_text: imageUrls.slice(1).join('\n'),
         video_url: data.video_url || '',
       });
       setSelectedLocationId(locationId);
@@ -394,16 +442,27 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
     try {
       let imageUrl = form.image_url || '';
       let videoUrl = form.video_url || '';
+      const additionalImageUrls = parseImageUrlsText(form.image_urls_text);
 
       if (removeImage) imageUrl = '';
       if (removeVideo) videoUrl = '';
 
-      if (imageFile) {
-        imageUrl = await uploadTrainingMedia(imageFile);
+      if (imageFiles.length) {
+        const uploadedImageUrls = [];
+        for (const file of imageFiles) {
+          // Загружаем по очереди, чтобы не создавать лишние гонки в API/media.
+          const uploaded = await uploadTrainingMedia(file);
+          uploadedImageUrls.push(uploaded);
+        }
+        imageUrl = uploadedImageUrls[0] || '';
+        if (uploadedImageUrls.length > 1) {
+          additionalImageUrls.unshift(...uploadedImageUrls.slice(1));
+        }
       }
       if (videoFile) {
         videoUrl = await uploadTrainingMedia(videoFile);
       }
+      const imageUrls = normalizeMediaUrlList([imageUrl, ...additionalImageUrls]);
 
       const payload = {
         title: form.title.trim(),
@@ -413,14 +472,15 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
         min_level_name: form.min_level_name || null,
         max_level_name: form.max_level_name || null,
         price: Math.max(0, normalizeNumber(form.price, 0)),
-        capacity_main: Math.max(0, Math.round(normalizeNumber(form.capacity_main, 0))),
+        capacity_main: isAmplua ? ampluaMainCapacity : Math.max(0, Math.round(normalizeNumber(form.capacity_main, 0))),
         capacity_reserve: Math.max(0, Math.round(normalizeNumber(form.capacity_reserve, 0))),
         training_type: isAmplua ? 'амплуа' : null,
         amplua_positions: isAmplua ? normalizeAmpluaPositions(form.amplua_positions) : null,
         coach_name: form.coach_name || null,
         location_id: selectedLocationId ? Number(selectedLocationId) : null,
         location_name: selectedLocationId ? null : (form.location_name.trim() || null),
-        image_url: imageUrl || null,
+        image_url: imageUrls[0] || null,
+        image_urls: imageUrls.length ? imageUrls : null,
         video_url: videoUrl || null,
       };
 
@@ -519,14 +579,23 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
               />
             </Field>
 
-            <Field label="Вместимость (основа)" error={errors.capacity_main}>
-              <Input
-                type="text"
-                inputMode="numeric"
-                value={form.capacity_main}
-                onChange={(e) => setField('capacity_main', e.target.value)}
-              />
-            </Field>
+            {isAmplua ? (
+              <Field label="Вместимость (основа)">
+                <>
+                  <Input type="text" inputMode="numeric" value={ampluaMainCapacity} disabled />
+                  <div className="field-hint">Автоматически: сумма слотов по позициям «амплуа».</div>
+                </>
+              </Field>
+            ) : (
+              <Field label="Вместимость (основа)" error={errors.capacity_main}>
+                <Input
+                  type="text"
+                  inputMode="numeric"
+                  value={form.capacity_main}
+                  onChange={(e) => setField('capacity_main', e.target.value)}
+                />
+              </Field>
+            )}
 
             <Field label="Вместимость (резерв)" error={errors.capacity_reserve}>
               <Input
@@ -633,22 +702,25 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
                 <Input
                   type="file"
                   accept="image/*"
+                  multiple
                   onChange={(e) => {
-                    const f = e.target.files?.[0] || null;
-                    setImageFile(f);
-                    if (f) setRemoveImage(false);
+                    const files = Array.from(e.target.files || []);
+                    setImageFiles(files);
+                    if (files.length) setRemoveImage(false);
                   }}
                 />
-                {imageFile ? <div className="field-hint">Выбран файл: {imageFile.name}</div> : null}
-                {!imageFile && form.image_url ? (
+                {imageFiles.length ? (
+                  <div className="field-hint">Выбрано файлов: {imageFiles.length}</div>
+                ) : null}
+                {!imageFiles.length && form.image_url ? (
                   <div className="field-hint">Текущее фото: <a href={form.image_url} target="_blank" rel="noreferrer">открыть</a></div>
                 ) : null}
-                {(imageFile || form.image_url) ? (
+                {(imageFiles.length || form.image_url) ? (
                   <Button
                     variant="secondary"
                     size="sm"
                     onClick={() => {
-                      setImageFile(null);
+                      setImageFiles([]);
                       setRemoveImage(true);
                     }}
                   >
@@ -656,6 +728,19 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
                   </Button>
                 ) : null}
               </>
+            </Field>
+
+            <Field
+              label="Дополнительные фото (URL, по одному в строке)"
+              error={errors.image_urls_text}
+              hint="Первое фото показывается как основное. Остальные попадут в галерею тренировки."
+            >
+              <Textarea
+                rows={4}
+                value={form.image_urls_text}
+                onChange={(e) => setField('image_urls_text', e.target.value)}
+                placeholder={"/media/trainings/photo-2.jpg\nhttps://example.com/photo-3.jpg"}
+              />
             </Field>
 
             <Field

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -24,6 +24,33 @@ def _ensure_level_range(min_level_name: str | None, max_level_name: str | None) 
         return
     if LEVEL_ORDER[min_level_name] > LEVEL_ORDER[max_level_name]:
         raise ValueError('min_level_name must not be higher than max_level_name')
+
+
+def _normalize_media_url(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _normalize_media_url_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+
+    if isinstance(value, (list, tuple, set)):
+        source = list(value)
+    else:
+        source = [value]
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in source:
+        url = _normalize_media_url(item)
+        if not url or url in seen:
+            continue
+        normalized.append(url)
+        seen.add(url)
+    return normalized
 
 
 class TrainingBase(BaseModel):
@@ -97,6 +124,10 @@ class TrainingBase(BaseModel):
         max_length=255,
         description='URL фото площадки / тренировки',
     )
+    image_urls: Optional[list[str]] = Field(
+        default=None,
+        description='Список URL фото (первый элемент используется как основное фото)',
+    )
     video_url: Optional[str] = Field(
         default=None,
         max_length=255,
@@ -129,6 +160,12 @@ class TrainingBase(BaseModel):
         if normalized not in CANONICAL_LEVEL_NAMES:
             raise ValueError(f"level must be one of: {', '.join(CANONICAL_LEVEL_NAMES)}")
         return normalized
+
+    @field_validator('image_urls', mode='before')
+    @classmethod
+    def validate_image_urls(cls, v: Any) -> Optional[list[str]]:
+        values = _normalize_media_url_list(v)
+        return values or None
 
     @model_validator(mode='after')
     def validate_level_range(self):
@@ -167,6 +204,7 @@ class TrainingUpdate(BaseModel):
     coach_name: Optional[str] = Field(default=None, max_length=100)
 
     image_url: Optional[str] = Field(default=None, max_length=255)
+    image_urls: Optional[list[str]] = None
     video_url: Optional[str] = Field(default=None, max_length=255)
 
     location_id: Optional[int] = None
@@ -186,6 +224,12 @@ class TrainingUpdate(BaseModel):
         if normalized not in CANONICAL_LEVEL_NAMES:
             raise ValueError(f"level must be one of: {', '.join(CANONICAL_LEVEL_NAMES)}")
         return normalized
+
+    @field_validator('image_urls', mode='before')
+    @classmethod
+    def validate_image_urls(cls, v: Any) -> Optional[list[str]]:
+        values = _normalize_media_url_list(v)
+        return values or None
 
     @model_validator(mode='after')
     def validate_level_range(self):
@@ -222,6 +266,7 @@ class TrainingPublic(BaseModel):
 
     coach_name: Optional[str]
     image_url: Optional[str]
+    image_urls: Optional[list[str]]
     video_url: Optional[str]
 
     location_id: Optional[int]

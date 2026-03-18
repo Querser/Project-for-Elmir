@@ -71,6 +71,13 @@ function clearPaymentQueryParams() {
   }
 }
 
+function updateViewportHeightVar() {
+  if (typeof window === 'undefined') return;
+  const viewportHeight = window.visualViewport?.height || window.innerHeight;
+  if (!viewportHeight) return;
+  document.documentElement.style.setProperty('--app-height', `${Math.round(viewportHeight)}px`);
+}
+
 export default function App() {
   const tg = useMemo(() => {
     return typeof window !== 'undefined' ? window.Telegram?.WebApp : null;
@@ -145,6 +152,31 @@ export default function App() {
       // ignore
     }
   }, [tg, isDark, activeTab, overlay.type]);
+
+  useEffect(() => {
+    updateViewportHeightVar();
+
+    const onResize = () => updateViewportHeightVar();
+    window.addEventListener('resize', onResize, { passive: true });
+    window.addEventListener('orientationchange', onResize, { passive: true });
+    window.visualViewport?.addEventListener?.('resize', onResize, { passive: true });
+    window.visualViewport?.addEventListener?.('scroll', onResize, { passive: true });
+
+    return () => {
+      window.removeEventListener('resize', onResize);
+      window.removeEventListener('orientationchange', onResize);
+      window.visualViewport?.removeEventListener?.('resize', onResize);
+      window.visualViewport?.removeEventListener?.('scroll', onResize);
+    };
+  }, []);
+
+  useEffect(() => {
+    const hasOverlay = Boolean(overlay.type);
+    document.body.classList.toggle('overlay-open', hasOverlay);
+    return () => {
+      document.body.classList.remove('overlay-open');
+    };
+  }, [overlay.type]);
 
   const openTraining = (trainingId) => {
     if (!trainingId) return;

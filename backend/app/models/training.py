@@ -56,6 +56,7 @@ class Training(Base):
 
     coach_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     image_url: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    image_urls: Mapped[Optional[list[str]]] = mapped_column(JSON, nullable=True)
     video_url: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
     location_id: Mapped[Optional[int]] = mapped_column(

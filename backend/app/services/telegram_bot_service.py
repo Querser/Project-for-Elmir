@@ -581,6 +581,27 @@ def _send_main_menu(db: Session, user: User) -> None:
     )
 
 
+def _send_start_flow(db: Session, user: User, *, is_new_user: bool) -> None:
+    _send_ban_notice_if_needed(db, user)
+    if _is_profile_complete(user):
+        _send_main_menu(db, user)
+        return
+
+    tg_id = int(getattr(user, "telegram_id", 0) or 0)
+    if tg_id:
+        intro_text = (
+            "Добро пожаловать в MosVolley.\n"
+            "Чтобы открыть мини-приложение, нужно завершить регистрацию."
+            if is_new_user
+            else "Ваш профиль заполнен не полностью. Давайте завершим регистрацию."
+        )
+        send_bot_message_to_user(
+            telegram_id=tg_id,
+            text=intro_text,
+        )
+    _send_profile_prompt(db, user)
+
+
 def _send_notifications_list(db: Session, user: User) -> None:
     rows = (
         db.query(Notification)
@@ -663,16 +684,12 @@ def _process_contact(db: Session, message: dict[str, Any], user: User) -> None:
     _send_profile_prompt(db, refreshed)
 
 
-def _handle_text_command(db: Session, user: User, text: str) -> None:
+def _handle_text_command(db: Session, user: User, text: str, *, is_new_user: bool = False) -> None:
     normalized = _normalize_text(text)
     tg_id = int(getattr(user, "telegram_id", 0))
 
     if normalized in {"/start", "start", "/menu", "menu"}:
-        _send_ban_notice_if_needed(db, user)
-        if _is_profile_complete(user):
-            _send_main_menu(db, user)
-        else:
-            _send_profile_prompt(db, user)
+        _send_start_flow(db, user, is_new_user=is_new_user)
         return
 
     if normalized == _normalize_text(BOT_BTN_NOTIFICATIONS):
@@ -719,6 +736,8 @@ def handle_telegram_update(db: Session, update: dict[str, Any]) -> dict[str, Any
         if not tg_id:
             return {"handled": False, "reason": "no_user_id"}
 
+        existing_user = db.query(User).filter(User.telegram_id == tg_id).one_or_none()
+        is_new_user = existing_user is None
         user = get_or_create_user_from_telegram(
             db,
             telegram_id=tg_id,
@@ -734,7 +753,7 @@ def handle_telegram_update(db: Session, update: dict[str, Any]) -> dict[str, Any
 
         text = (message.get("text") or "").strip()
         if text:
-            _handle_text_command(db, user, text)
+            _handle_text_command(db, user, text, is_new_user=is_new_user)
             return {"handled": True, "kind": "text"}
 
         send_bot_message_to_user(

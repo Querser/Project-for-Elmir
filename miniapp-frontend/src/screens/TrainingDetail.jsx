@@ -173,6 +173,124 @@ function resolveMediaUrl(raw) {
   }
 }
 
+function isVideoKind(value) {
+  const normalized = maybeFixUtf8Mojibake(value ?? '').toString().trim().toLowerCase();
+  if (!normalized) return false;
+  return normalized.includes('video') || normalized.includes('mp4') || normalized.includes('webm') || normalized.includes('mov');
+}
+
+function inferMediaKind(url, candidate) {
+  if (isVideoKind(candidate?.type) || isVideoKind(candidate?.kind) || isVideoKind(candidate?.media_type) || isVideoKind(candidate?.mime) || isVideoKind(candidate?.content_type)) {
+    return 'video';
+  }
+  if (/\.(mp4|webm|mov|m4v)(\?|#|$)/i.test(url)) {
+    return 'video';
+  }
+  return 'image';
+}
+
+function extractMediaUrl(entry) {
+  if (entry == null) return '';
+
+  if (typeof entry === 'string' || typeof entry === 'number') {
+    return resolveMediaUrl(entry);
+  }
+
+  if (typeof entry !== 'object') return '';
+
+  const raw =
+    entry?.url ??
+    entry?.src ??
+    entry?.path ??
+    entry?.href ??
+    entry?.image_url ??
+    entry?.imageUrl ??
+    entry?.video_url ??
+    entry?.videoUrl ??
+    entry?.file ??
+    entry?.original ??
+    '';
+
+  return resolveMediaUrl(raw);
+}
+
+function appendMediaEntries(list, source) {
+  if (source == null) return;
+  if (Array.isArray(source)) {
+    source.forEach((item) => appendMediaEntries(list, item));
+    return;
+  }
+  if (typeof source === 'object' && !Array.isArray(source)) {
+    const url = extractMediaUrl(source);
+    if (url) {
+      list.push({ ...source, __url: url });
+      return;
+    }
+
+    const values = Object.values(source);
+    if (values.length) {
+      values.forEach((item) => appendMediaEntries(list, item));
+    }
+    return;
+  }
+
+  const url = extractMediaUrl(source);
+  if (url) {
+    list.push({ __url: url });
+  }
+}
+
+function buildTrainingMediaItems(trainingData) {
+  if (!trainingData) return [];
+
+  const entries = [];
+  const pushUnique = (collection, seen, item) => {
+    if (!item?.src) return;
+    if (seen.has(item.src)) return;
+    seen.add(item.src);
+    collection.push(item);
+  };
+
+  appendMediaEntries(entries, trainingData?.video_url);
+  appendMediaEntries(entries, trainingData?.videoUrl);
+  appendMediaEntries(entries, trainingData?.videos);
+  appendMediaEntries(entries, trainingData?.video_urls);
+  appendMediaEntries(entries, trainingData?.videoUrls);
+
+  appendMediaEntries(entries, trainingData?.image_url);
+  appendMediaEntries(entries, trainingData?.imageUrl);
+  appendMediaEntries(entries, trainingData?.images);
+  appendMediaEntries(entries, trainingData?.image_urls);
+  appendMediaEntries(entries, trainingData?.imageUrls);
+  appendMediaEntries(entries, trainingData?.photos);
+  appendMediaEntries(entries, trainingData?.photo_urls);
+  appendMediaEntries(entries, trainingData?.photoUrls);
+  appendMediaEntries(entries, trainingData?.gallery);
+  appendMediaEntries(entries, trainingData?.gallery_images);
+  appendMediaEntries(entries, trainingData?.galleryImages);
+  appendMediaEntries(entries, trainingData?.media);
+  appendMediaEntries(entries, trainingData?.media_items);
+  appendMediaEntries(entries, trainingData?.mediaItems);
+
+  const videos = [];
+  const images = [];
+  const seenVideo = new Set();
+  const seenImage = new Set();
+
+  entries.forEach((entry) => {
+    const src = entry?.__url || extractMediaUrl(entry);
+    if (!src) return;
+    const type = inferMediaKind(src, entry);
+    if (type === 'video') {
+      pushUnique(videos, seenVideo, { type: 'video', src });
+    } else {
+      pushUnique(images, seenImage, { type: 'image', src });
+    }
+  });
+
+  return [...videos, ...images];
+}
+
 function textToArray(value) {
   if (value == null) return [];
   if (Array.isArray(value)) return value;
@@ -699,16 +817,12 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
     setPaymentHint('');
   }, [trainingId]);
 
-  const mediaItems = useMemo(() => {
-    const items = [];
-    const videoUrl = resolveMediaUrl(training?.video_url);
-    const imageUrl = resolveMediaUrl(training?.image_url);
-
-    if (videoUrl) items.push({ type: 'video', src: videoUrl });
-    if (imageUrl) items.push({ type: 'image', src: imageUrl });
-
-    return items;
-  }, [training?.image_url, training?.video_url]);
+  const mediaItems = useMemo(() => buildTrainingMediaItems(training), [training]);
+  const mediaPosterUrl = useMemo(() => {
+    const firstImage = mediaItems.find((item) => item.type === 'image');
+    if (firstImage?.src) return firstImage.src;
+    return resolveMediaUrl(training?.image_url) || '';
+  }, [mediaItems, training?.image_url]);
 
   const trainingType = useMemo(() => {
     return maybeFixUtf8Mojibake(
@@ -1289,7 +1403,7 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
                     playsInline
                     loop
                     preload="metadata"
-                    poster={resolveMediaUrl(training?.image_url) || undefined}
+                    poster={mediaPosterUrl || undefined}
                     controls={false}
                   />
                 ) : activeMediaItem?.type === 'image' ? (

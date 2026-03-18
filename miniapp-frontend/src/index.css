@@ -30,6 +30,9 @@ body {
   -webkit-font-smoothing: antialiased;
   overflow-x: hidden;
 }
+body.overlay-open {
+  overflow: hidden;
+}
 
 button, input, select {
   font: inherit;
@@ -40,6 +43,7 @@ button, input, select {
   margin: 0 auto;
   min-height: 100vh;
   min-height: 100dvh;
+  min-height: var(--app-height, 100dvh);
   background-color: var(--bg);
   display: flex;
   flex-direction: column;
@@ -570,9 +574,9 @@ button, input, select {
 }
 .booking-position-option {
   width: 100%;
-  border: 1px solid var(--border-soft);
+  border: 1px solid rgba(15, 23, 42, 0.16);
   border-radius: 16px;
-  background: #fff;
+  background: #f8fafc;
   padding: 12px 14px;
   display: flex;
   align-items: center;
@@ -581,10 +585,20 @@ button, input, select {
   text-align: left;
   cursor: pointer;
   box-shadow: none;
+  color: #0f172a;
+  transition: border-color 0.16s ease, background-color 0.16s ease, box-shadow 0.16s ease;
+}
+.booking-position-option:hover {
+  border-color: rgba(47, 125, 246, 0.45);
+}
+.booking-position-option:focus-visible {
+  outline: none;
+  border-color: rgba(47, 125, 246, 0.65);
+  box-shadow: 0 0 0 3px rgba(47, 125, 246, 0.18);
 }
 .booking-position-option.is-selected {
-  border-color: rgba(59, 130, 246, 0.55);
-  background: rgba(59, 130, 246, 0.08);
+  border-color: var(--primary-dark);
+  background: linear-gradient(180deg, var(--primary-dark), var(--primary));
 }
 .booking-position-option-main {
   display: flex;
@@ -599,7 +613,8 @@ button, input, select {
 }
 .booking-position-option-meta {
   font-size: 12px;
-  color: var(--text-muted);
+  color: #334155;
+  font-weight: 600;
 }
 .booking-position-option-check {
   flex-shrink: 0;
@@ -613,6 +628,14 @@ button, input, select {
   color: #fff;
   font-size: 13px;
   font-weight: 700;
+}
+.booking-position-option.is-selected .booking-position-option-label,
+.booking-position-option.is-selected .booking-position-option-meta {
+  color: #fff;
+}
+.booking-position-option.is-selected .booking-position-option-check {
+  background: #fff;
+  color: var(--primary-dark);
 }
 
 /* Tabbar */
@@ -681,6 +704,22 @@ button, input, select {
   width: 100%;
   max-width: 480px;
   min-height: 100%;
+}
+
+@media (min-width: 768px) {
+  .overlay-screen {
+    align-items: flex-start;
+    padding: 16px 0;
+    padding-bottom: 16px;
+  }
+
+  .overlay-content {
+    min-height: calc(100dvh - 32px);
+    border-radius: 34px;
+    overflow: hidden;
+    box-shadow: 0 18px 60px rgba(15, 23, 42, 0.18);
+    background: var(--bg);
+  }
 }
 
 .filters-badge {
@@ -808,6 +847,27 @@ body.theme-dark .modal {
 body.theme-dark .tabbar {
   background-color: var(--bg-alt);
   border-top-color: rgba(255,255,255,0.10);
+}
+body.theme-dark .booking-position-option {
+  background: #111a2d;
+  border-color: rgba(255, 255, 255, 0.16);
+  color: var(--text-main);
+}
+body.theme-dark .booking-position-option:hover {
+  border-color: rgba(74, 163, 255, 0.65);
+}
+body.theme-dark .booking-position-option-label {
+  color: var(--text-main);
+}
+body.theme-dark .booking-position-option-meta {
+  color: rgba(230, 237, 247, 0.82);
+}
+body.theme-dark .booking-position-option.is-selected {
+  border-color: #7ec3ff;
+  background: linear-gradient(180deg, #2d82da, #4aa3ff);
+}
+body.theme-dark .booking-position-option.is-selected .booking-position-option-check {
+  color: #2d82da;
 }
 
 /* ===== Profile edit form helpers ===== */
