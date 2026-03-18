@@ -171,6 +171,7 @@ class TelegramBotAPI:
 
 _bot_api = TelegramBotAPI()
 _branding_applied = False
+_BOOT_WEBAPP_VERSION = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
 
 
 def ensure_telegram_branding() -> None:
@@ -209,7 +210,7 @@ def ensure_telegram_branding() -> None:
         except Exception:
             log.exception("Telegram branding: failed to ensure bot name")
 
-    miniapp_url = (settings.telegram_webapp_url or "").strip()
+    miniapp_url = _with_webapp_version((settings.telegram_webapp_url or "").strip())
     if miniapp_url:
         try:
             ok = _bot_api.set_chat_menu_button(text=BOT_BTN_OPEN_APP, url=miniapp_url)
@@ -251,6 +252,28 @@ def _append_url_query_param(url: str, key: str, value: str | int | None) -> str:
         return f"{base}{sep}{key}={v}"
 
 
+def _webapp_version_token() -> str:
+    # Optional manual override for emergency cache-busting.
+    override = (os.getenv("TELEGRAM_WEBAPP_VERSION") or "").strip()
+    if override:
+        return override
+    return _BOOT_WEBAPP_VERSION
+
+
+def _with_webapp_version(url: str) -> str:
+    return _append_url_query_param(url, "v", _webapp_version_token())
+
+
+def _extract_bot_command(normalized_text: str) -> str:
+    text = (normalized_text or "").strip()
+    if not text:
+        return ""
+    head = text.split(maxsplit=1)[0]
+    if not head.startswith("/"):
+        return head
+    return head.split("@", 1)[0]
+
+
 def _is_admin_user(user: User) -> bool:
     if bool(getattr(user, "is_admin", False)):
         return True
@@ -280,6 +303,7 @@ def _main_menu_keyboard(
 ) -> dict[str, Any]:
     keyboard: list[list[dict[str, Any]]] = []
 
+    miniapp_url = _with_webapp_version(miniapp_url)
     miniapp_url = _append_url_query_param(miniapp_url, "tg_id", telegram_id)
     admin_url = _append_url_query_param(admin_url, "tg_id", telegram_id)
 
@@ -687,8 +711,9 @@ def _process_contact(db: Session, message: dict[str, Any], user: User) -> None:
 def _handle_text_command(db: Session, user: User, text: str, *, is_new_user: bool = False) -> None:
     normalized = _normalize_text(text)
     tg_id = int(getattr(user, "telegram_id", 0))
+    command = _extract_bot_command(normalized)
 
-    if normalized in {"/start", "start", "/menu", "menu"}:
+    if command in {"/start", "/menu"} or normalized in {"start", "menu"}:
         _send_start_flow(db, user, is_new_user=is_new_user)
         return
 
