@@ -127,7 +127,7 @@ def _run_payments_retention_cleanup() -> None:
 
 
 app = FastAPI(
-    title="Volleyball MiniApp API",
+    title="MosVolley API",
     version="0.1.0",
     docs_url="/docs",
     redoc_url="/redoc",

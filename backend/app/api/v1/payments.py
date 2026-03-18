@@ -18,7 +18,7 @@ from app.models.payment import Payment, PaymentStatus
 from app.models.user import User
 from app.services.enrollment_service import enroll_user_to_training
 from app.services.payment_retention_service import purge_payments_older_than_quarter
-from app.services.training_service import get_training_or_404
+from app.services.training_service import AMPLUA_TRAINING_TYPE, get_training_or_404
 from app.services.training_ui_service import build_training_ui_payload
 from app.services.yookassa_service import (
     create_redirect_payment,
@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 class EnrollmentCheckoutRequest(BaseModel):
     training_id: int
     price_tier_id: int | None = None
+    position_key: str | None = None
     return_url: str | None = Field(default=None, max_length=2000)
 
 
@@ -158,6 +159,10 @@ def _resolve_checkout_context(db: Session, *, user: User, training_id: int) -> d
             details={"training_id": training_id},
         )
 
+    training_type = str(ui_payload.get("training_type") or "").strip().lower()
+    available_positions = list(ui_payload.get("available_positions") or [])
+    position_slots = list(ui_payload.get("position_slots") or [])
+
     amount = _as_amount(ui_payload.get("final_price") or ui_payload.get("price") or 0)
     picked_price_tier_id = _safe_int(ui_payload.get("picked_price_tier_id"))
 
@@ -166,8 +171,10 @@ def _resolve_checkout_context(db: Session, *, user: User, training_id: int) -> d
         "amount": amount,
         "picked_price_tier_id": picked_price_tier_id,
         "ui_payload": ui_payload,
+        "training_type": training_type,
+        "available_positions": available_positions,
+        "position_slots": position_slots,
     }
-
 
 def _payment_status_to_local(provider_status: str) -> PaymentStatus:
     normalized = str(provider_status or "").strip().lower()
@@ -196,6 +203,55 @@ def create_enrollment_checkout(
     training = checkout["training"]
     amount: Decimal = checkout["amount"]
     picked_price_tier_id = checkout["picked_price_tier_id"]
+    training_type = checkout["training_type"]
+    available_positions = checkout["available_positions"]
+    position_slots = checkout["position_slots"]
+    requested_position_key = str(payload.position_key or "").strip() or None
+
+    if training_type == AMPLUA_TRAINING_TYPE:
+        if requested_position_key:
+            slot_map = {str(slot.get("key") or ""): slot for slot in position_slots}
+            selected_slot = slot_map.get(requested_position_key)
+            if not selected_slot:
+                raise AppException.validation(
+                    message="Выберите корректную позицию",
+                    details={
+                        "training_id": int(training.id),
+                        "available_positions": available_positions,
+                        "position_slots": position_slots,
+                    },
+                )
+            if not bool(selected_slot.get("has_free_slots")):
+                raise AppException.conflict(
+                    code=ErrorCode.TRAINING_FULL,
+                    message=f'На позиции "{selected_slot.get("label")}" нет свободных мест',
+                    details={
+                        "training_id": int(training.id),
+                        "requested_position_key": requested_position_key,
+                        "requested_position_label": selected_slot.get("label"),
+                        "available_positions": available_positions,
+                        "position_slots": position_slots,
+                    },
+                )
+        elif available_positions:
+            raise AppException.validation(
+                message='Для тренировки типа "амплуа" выберите позицию',
+                details={
+                    "training_id": int(training.id),
+                    "available_positions": available_positions,
+                    "position_slots": position_slots,
+                },
+            )
+        else:
+            raise AppException.conflict(
+                code=ErrorCode.TRAINING_FULL,
+                message="На тренировку больше нет свободных мест по позициям",
+                details={
+                    "training_id": int(training.id),
+                    "available_positions": [],
+                    "position_slots": position_slots,
+                },
+            )
 
     if payload.price_tier_id is not None and picked_price_tier_id is not None:
         if int(payload.price_tier_id) != int(picked_price_tier_id):
@@ -219,6 +275,7 @@ def create_enrollment_checkout(
         "user_id": str(user.id),
         "training_id": str(training.id),
         "price_tier_id": str(picked_price_tier_id) if picked_price_tier_id is not None else "",
+        "position_key": requested_position_key or "",
     }
     description = f"Тренировка #{training.id}: {str(getattr(training, 'title', '') or '').strip()}"
 
@@ -322,6 +379,7 @@ def get_enrollment_payment_status(
                     user_id=int(user.id),
                     is_paid=True,
                     price_tier_id=price_tier_id,
+                    position_key=str(metadata.get("position_key") or "").strip() or None,
                 )
                 enrollment_payload = {
                     "created_or_updated": True,

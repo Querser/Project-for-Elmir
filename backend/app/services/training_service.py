@@ -1,7 +1,7 @@
 ﻿from __future__ import annotations
 
 from datetime import datetime
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Sequence, Tuple
 
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
@@ -12,6 +12,93 @@ from app.models.training import Training
 from app.schemas.training import CANONICAL_LEVEL_NAMES, TrainingCreate, TrainingUpdate
 
 _LEVEL_ORDER = {name: idx for idx, name in enumerate(CANONICAL_LEVEL_NAMES)}
+
+AMPLUA_TRAINING_TYPE = "амплуа"
+AMPLUA_POSITION_SPECS: tuple[dict[str, str], ...] = (
+    {"key": "outside_1", "label": "доигровка"},
+    {"key": "outside_2", "label": "доигровка"},
+    {"key": "middle_1", "label": "ЦБ"},
+    {"key": "middle_2", "label": "ЦБ"},
+    {"key": "setter", "label": "связка"},
+    {"key": "opposite", "label": "диагональный"},
+    {"key": "libero", "label": "либеро"},
+)
+
+_AMPLUA_MAIN_STATUSES = {"active", "enrolled", "confirmed"}
+_AMPLUA_RESERVED_STATUSES = {"reserve", "waitlist", "standby"}
+_AMPLUA_OCCUPIED_STATUSES = _AMPLUA_MAIN_STATUSES | _AMPLUA_RESERVED_STATUSES
+
+
+def normalize_training_type(value: Any) -> str | None:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return None
+    if raw in {AMPLUA_TRAINING_TYPE, "amplua"}:
+        return AMPLUA_TRAINING_TYPE
+    if raw in {"обычная", "standard", "regular", "default"}:
+        return None
+    return raw
+
+
+def is_amplua_training(training: Any) -> bool:
+    return normalize_training_type(getattr(training, "training_type", training)) == AMPLUA_TRAINING_TYPE
+
+
+def normalize_amplua_positions(value: Any) -> dict[str, int]:
+    raw = value if isinstance(value, dict) else {}
+    normalized: dict[str, int] = {}
+    for spec in AMPLUA_POSITION_SPECS:
+        key = spec["key"]
+        item = raw.get(key, 0)
+        try:
+            count = int(float(item))
+        except Exception:
+            count = 0
+        normalized[key] = max(0, count)
+    return normalized
+
+
+def get_amplua_position_label(position_key: str | None) -> str:
+    key = str(position_key or "").strip()
+    for spec in AMPLUA_POSITION_SPECS:
+        if spec["key"] == key:
+            return spec["label"]
+    return ""
+
+
+def build_amplua_position_snapshot(
+    *,
+    positions: Any,
+    enrollments: Sequence[Any] | None = None,
+) -> list[dict[str, Any]]:
+    capacities = normalize_amplua_positions(positions)
+    occupied: dict[str, int] = {spec["key"]: 0 for spec in AMPLUA_POSITION_SPECS}
+
+    for enrollment in enrollments or []:
+        status = str(getattr(getattr(enrollment, "status", None), "value", getattr(enrollment, "status", "")) or "").strip().lower()
+        if status not in _AMPLUA_OCCUPIED_STATUSES:
+            continue
+        position_key = str(getattr(enrollment, "position_key", "") or "").strip()
+        if position_key in occupied:
+            occupied[position_key] += 1
+
+    snapshot: list[dict[str, Any]] = []
+    for spec in AMPLUA_POSITION_SPECS:
+        key = spec["key"]
+        capacity = capacities.get(key, 0)
+        used = occupied.get(key, 0)
+        free = max(capacity - used, 0)
+        snapshot.append(
+            {
+                "key": key,
+                "label": spec["label"],
+                "capacity": capacity,
+                "occupied": used,
+                "free": free,
+                "has_free_slots": free > 0,
+            }
+        )
+    return snapshot
 
 
 def get_training_or_404(db: Session, training_id: int) -> Training:
@@ -95,6 +182,8 @@ def create_training(db: Session, data: TrainingCreate) -> Training:
         price=data.price,
         capacity_main=data.capacity_main,
         capacity_reserve=data.capacity_reserve,
+        training_type=normalize_training_type(getattr(data, "training_type", None)),
+        amplua_positions=normalize_amplua_positions(getattr(data, "amplua_positions", None)),
         coach_name=data.coach_name,
         image_url=data.image_url,
         video_url=data.video_url,
@@ -118,6 +207,12 @@ def update_training(db: Session, training: Training, data: TrainingUpdate) -> Tr
             location_id=location_id,
             location_name=location_name,
         )
+
+    if 'training_type' in update_data:
+        update_data['training_type'] = normalize_training_type(update_data.get('training_type'))
+
+    if 'amplua_positions' in update_data:
+        update_data['amplua_positions'] = normalize_amplua_positions(update_data.get('amplua_positions'))
 
     next_min_level = update_data.get('min_level_name', getattr(training, 'min_level_name', None))
     next_max_level = update_data.get('max_level_name', getattr(training, 'max_level_name', None))

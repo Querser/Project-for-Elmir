@@ -57,7 +57,7 @@ export default function LoginPage() {
           <ThemeToggle compact />
         </div>
 
-        <div className="login-title">Админ-панель Elmir Volley</div>
+        <div className="login-title">Админ-панель MosVolley</div>
         <div className="login-sub">Вход для управления тренировками, игроками и рассылками</div>
 
         {error ? <div className="alert alert-error">{error}</div> : null}

@@ -18,6 +18,29 @@ const TITLE_RE = /^[\p{L}\p{N}][\p{L}\p{N}\s.,:()"'!?+\-/]{1,99}$/u;
 const PERSON_NAME_RE = /^[\p{L}][\p{L}\s.'-]{1,99}$/u;
 const LOCATION_RE = /^[\p{L}\p{N}][\p{L}\p{N}\s.,:()"'!?+\-/]{1,119}$/u;
 const MEDIA_URL_RE = /^(https?:\/\/[^\s]+|\/media\/trainings\/[^\s]+)$/i;
+const AMPLUA_POSITION_SPECS = [
+  { key: 'outside_1', label: 'доигровка' },
+  { key: 'outside_2', label: 'доигровка' },
+  { key: 'middle_1', label: 'ЦБ' },
+  { key: 'middle_2', label: 'ЦБ' },
+  { key: 'setter', label: 'связка' },
+  { key: 'opposite', label: 'диагональный' },
+  { key: 'libero', label: 'либеро' },
+];
+
+function isAmpluaTrainingType(value) {
+  return String(value || '').trim().toLowerCase() === 'амплуа';
+}
+
+function normalizeAmpluaPositions(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  return AMPLUA_POSITION_SPECS.reduce((acc, spec) => {
+    const raw = source[spec.key];
+    const parsed = Number(String(raw ?? 0).replace(',', '.').trim());
+    acc[spec.key] = Number.isFinite(parsed) ? Math.max(0, Math.round(parsed)) : 0;
+    return acc;
+  }, {});
+}
 
 function resolveTrainingLevelName(value, fallback) {
   return normalizeLevelName(value) || fallback;
@@ -122,6 +145,8 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
     price: 0,
     capacity_main: 12,
     capacity_reserve: 12,
+    training_type: '',
+    amplua_positions: normalizeAmpluaPositions({}),
     coach_name: '',
     location_name: '',
     image_url: '',
@@ -138,6 +163,7 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
 
   const [errors, setErrors] = useState({});
   const canSave = useMemo(() => !busy && !loading, [busy, loading]);
+  const isAmplua = isAmpluaTrainingType(form.training_type);
 
   function setField(name, value) {
     setForm((prev) => ({ ...prev, [name]: value }));
@@ -296,6 +322,8 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
         price: fromState.price ?? 0,
         capacity_main: fromState.capacity_main ?? 0,
         capacity_reserve: fromState.capacity_reserve ?? 0,
+        training_type: fromState.training_type || '',
+        amplua_positions: normalizeAmpluaPositions(fromState.amplua_positions),
         coach_name: fromState.coach_name || '',
         location_name: locationId ? '' : locationName,
         image_url: fromState.image_url || '',
@@ -321,6 +349,8 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
         price: data.price ?? 0,
         capacity_main: data.capacity_main ?? 0,
         capacity_reserve: data.capacity_reserve ?? 0,
+        training_type: data.training_type || '',
+        amplua_positions: normalizeAmpluaPositions(data.amplua_positions),
         coach_name: data.coach_name || '',
         location_name: locationId ? '' : locationName,
         image_url: data.image_url || '',
@@ -385,6 +415,8 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
         price: Math.max(0, normalizeNumber(form.price, 0)),
         capacity_main: Math.max(0, Math.round(normalizeNumber(form.capacity_main, 0))),
         capacity_reserve: Math.max(0, Math.round(normalizeNumber(form.capacity_reserve, 0))),
+        training_type: isAmplua ? 'амплуа' : null,
+        amplua_positions: isAmplua ? normalizeAmpluaPositions(form.amplua_positions) : null,
         coach_name: form.coach_name || null,
         location_id: selectedLocationId ? Number(selectedLocationId) : null,
         location_name: selectedLocationId ? null : (form.location_name.trim() || null),
@@ -524,6 +556,37 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
             <Field label="Тренер" error={errors.coach_name}>
               <Input value={form.coach_name} onChange={(e) => setField('coach_name', e.target.value)} />
             </Field>
+
+            <Field label="Тип тренировки">
+              <Select value={form.training_type} onChange={(e) => setField('training_type', e.target.value)}>
+                <option value="">Обычная</option>
+                <option value="амплуа">амплуа</option>
+              </Select>
+            </Field>
+
+            {isAmplua ? (
+              <div className="grid-2" style={{ gridColumn: '1 / -1' }}>
+                {AMPLUA_POSITION_SPECS.map((spec) => (
+                  <Field key={spec.key} label={spec.label}>
+                    <Input
+                      type="text"
+                      inputMode="numeric"
+                      value={form.amplua_positions?.[spec.key] ?? 0}
+                      onChange={(e) => {
+                        const parsed = Number(String(e.target.value || '').replace(',', '.').trim());
+                        setForm((prev) => ({
+                          ...prev,
+                          amplua_positions: {
+                            ...(prev.amplua_positions || {}),
+                            [spec.key]: Number.isFinite(parsed) ? Math.max(0, Math.round(parsed)) : 0,
+                          },
+                        }));
+                      }}
+                    />
+                  </Field>
+                ))}
+              </div>
+            ) : null}
 
             <Field label="Локация из справочника">
               <Select

@@ -40,6 +40,7 @@ def _call_enroll_service(db: Session, user: User, payload: EnrollmentCreateReque
         "training_id": payload.training_id,
         "price_tier_id": getattr(payload, "price_tier_id", None),
         "is_paid": getattr(payload, "is_paid", False),
+        "position_key": getattr(payload, "position_key", None),
     }
 
     # 1) user_id=... (наиболее вероятно/правильно для твоего проекта)

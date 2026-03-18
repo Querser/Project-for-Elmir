@@ -8,6 +8,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    JSON,
     Numeric,
     String,
 )
@@ -49,6 +50,9 @@ class Training(Base):
 
     capacity_main: Mapped[int] = mapped_column(Integer, nullable=False)
     capacity_reserve: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    training_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    amplua_positions: Mapped[Optional[dict[str, int]]] = mapped_column(JSON, nullable=True)
 
     coach_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     image_url: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)

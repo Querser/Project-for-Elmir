@@ -24,6 +24,27 @@ const TAB_MORE = 'more';
 
 const LS_THEME = 'ui.theme';
 
+function expandTelegramWebApp(tg) {
+  if (!tg) return;
+  try {
+    tg.ready?.();
+  } catch {
+    // ignore
+  }
+  try {
+    tg.expand?.();
+  } catch {
+    // ignore
+  }
+  try {
+    if (typeof tg.requestFullscreen === 'function') {
+      tg.requestFullscreen();
+    }
+  } catch {
+    // ignore
+  }
+}
+
 function readTrainingIdFromUrl() {
   if (typeof window === 'undefined') return null;
   try {
@@ -55,6 +76,8 @@ export default function App() {
     return typeof window !== 'undefined' ? window.Telegram?.WebApp : null;
   }, []);
 
+  const initialTrainingId = useMemo(() => readTrainingIdFromUrl(), []);
+
   const [activeTab, setActiveTab] = useState(TAB_SCHEDULE);
 
   const [filters, setFilters] = useState({
@@ -79,7 +102,11 @@ export default function App() {
   const [refreshTick, setRefreshTick] = useState(0);
 
   // Полноэкранные оверлеи поверх табов (filters/training/profile)
-  const [overlay, setOverlay] = useState({ type: null, payload: null });
+  const [overlay, setOverlay] = useState(() =>
+    initialTrainingId
+      ? { type: 'training', payload: { trainingId: initialTrainingId } }
+      : { type: null, payload: null },
+  );
 
   useEffect(() => {
     initTelegramAuth().catch(() => {
@@ -88,12 +115,9 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const trainingId = readTrainingIdFromUrl();
-    if (!trainingId) return;
-    setActiveTab(TAB_SCHEDULE);
-    setOverlay({ type: 'training', payload: { trainingId } });
+    if (!initialTrainingId) return;
     clearPaymentQueryParams();
-  }, []);
+  }, [initialTrainingId]);
 
   useEffect(() => {
     try {
@@ -113,15 +137,14 @@ export default function App() {
 
   useEffect(() => {
     if (!tg) return;
+    expandTelegramWebApp(tg);
     try {
-      tg.ready?.();
-      tg.expand?.();
       tg.setHeaderColor?.(isDark ? '#0b1220' : '#f4f7fc');
       tg.setBackgroundColor?.(isDark ? '#0b1220' : '#f4f7fc');
     } catch {
       // ignore
     }
-  }, [tg, isDark]);
+  }, [tg, isDark, activeTab, overlay.type]);
 
   const openTraining = (trainingId) => {
     if (!trainingId) return;

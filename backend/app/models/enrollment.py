@@ -10,6 +10,7 @@ from sqlalchemy import (
     Boolean,
     Enum,
     ForeignKey,
+    String,
     UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -62,6 +63,8 @@ class Enrollment(Base):
 
     # факт оплаты (пока просто флажок, дальше увяжем с платежами)
     is_paid: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    position_key: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

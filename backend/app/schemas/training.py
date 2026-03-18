@@ -76,6 +76,16 @@ class TrainingBase(BaseModel):
         description='Лимит мест в резерве',
     )
 
+    training_type: Optional[str] = Field(
+        default=None,
+        max_length=32,
+        description='Тип тренировки',
+    )
+    amplua_positions: Optional[dict[str, int]] = Field(
+        default=None,
+        description='Позиции для тренировок типа амплуа',
+    )
+
     coach_name: Optional[str] = Field(
         default=None,
         max_length=100,
@@ -151,6 +161,9 @@ class TrainingUpdate(BaseModel):
     capacity_main: Optional[int] = Field(default=None, ge=0, le=1000)
     capacity_reserve: Optional[int] = Field(default=None, ge=0, le=1000)
 
+    training_type: Optional[str] = Field(default=None, max_length=32)
+    amplua_positions: Optional[dict[str, int]] = None
+
     coach_name: Optional[str] = Field(default=None, max_length=100)
 
     image_url: Optional[str] = Field(default=None, max_length=255)
@@ -203,6 +216,9 @@ class TrainingPublic(BaseModel):
 
     capacity_main: int
     capacity_reserve: int
+
+    training_type: Optional[str]
+    amplua_positions: Optional[dict[str, int]]
 
     coach_name: Optional[str]
     image_url: Optional[str]

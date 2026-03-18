@@ -54,7 +54,7 @@ DEFAULT_DATABASE_URL = "postgresql+psycopg2://postgres:postgres@db:5432/volleyba
 
 
 class Settings(BaseModel):
-    project_name: str = _env_str("PROJECT_NAME", "Volleyball Training API")
+    project_name: str = _env_str("PROJECT_NAME", "MosVolley API")
     api_v1_str: str = _env_str("API_V1_STR", "/api/v1")
 
     environment: str = _env_str("ENVIRONMENT", "development")

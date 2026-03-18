@@ -23,6 +23,7 @@ class EnrollmentCreateRequest(BaseModel):
     training_id: int
     is_paid: bool = False
     price_tier_id: Optional[int] = None
+    position_key: Optional[str] = None
 
 
 class EnrollmentRead(BaseModel):
@@ -31,6 +32,7 @@ class EnrollmentRead(BaseModel):
     training_id: int
     is_paid: bool
     status: str
+    position_key: Optional[str] = None
 
     price_tier_id: Optional[int] = None
     created_at: Optional[datetime] = None

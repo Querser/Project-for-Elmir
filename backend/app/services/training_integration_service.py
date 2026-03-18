@@ -65,14 +65,22 @@ def build_yandex_map_payload(training: Any) -> dict[str, Any]:
 
     if lat is not None and lon is not None:
         ll = f"{lon},{lat}"
-        payload["open_url"] = f"https://yandex.ru/maps/?ll={quote_plus(ll)}&z=15&pt={quote_plus(ll)},pm2rdm"
-        payload["route_url"] = f"https://yandex.ru/maps/?mode=routes&rtext=~{lat},{lon}&rtt=auto"
+        exact_url = (
+            f"https://yandex.ru/maps/?ll={quote_plus(ll)}"
+            f"&pt={quote_plus(ll)},pm2rdm&z=17&mode=whatshere"
+        )
+        payload["open_url"] = exact_url
+        payload["route_url"] = (
+            f"https://yandex.ru/maps/?mode=routes&rtext=~{lat},{lon}&rtt=auto"
+            f"&ll={quote_plus(ll)}&z=17"
+        )
         payload["widget_url"] = f"https://yandex.ru/map-widget/v1/?ll={quote_plus(ll)}&z=15&pt={quote_plus(ll)},pm2rdm&lang=ru_RU"
         return payload
 
     if label:
         encoded = quote_plus(label)
-        payload["open_url"] = f"https://yandex.ru/maps/?text={encoded}"
+        exact_url = f"https://yandex.ru/maps/?text={encoded}&mode=whatshere"
+        payload["open_url"] = exact_url
         payload["route_url"] = f"https://yandex.ru/maps/?mode=routes&rtext=~{encoded}&rtt=auto"
         payload["widget_url"] = f"https://yandex.ru/map-widget/v1/?text={encoded}&z=15&lang=ru_RU"
 
@@ -163,7 +171,7 @@ def build_training_ics_content(training: Any) -> str:
     lines = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
-        "PRODID:-//Elmir Volleyball//MiniApp//RU",
+        "PRODID:-//MosVolley//MiniApp//RU",
         "CALSCALE:GREGORIAN",
         "METHOD:PUBLISH",
         "BEGIN:VEVENT",
@@ -179,4 +187,3 @@ def build_training_ics_content(training: Any) -> str:
         "",
     ]
     return "\r\n".join(lines)
-

@@ -16,6 +16,10 @@ from app.models.setting import Setting
 from app.models.user import User
 from app.schemas.training import CANONICAL_LEVEL_NAMES
 from app.services.ban_service import get_active_ban
+from app.services.training_service import (
+    build_amplua_position_snapshot,
+    is_amplua_training,
+)
 from app.services.yookassa_service import create_refund
 
 _LEVEL_ORDER = {name: idx for idx, name in enumerate(CANONICAL_LEVEL_NAMES)}
@@ -79,6 +83,15 @@ def _status_to_str(st: Any) -> str:
     return s.lower().strip()
 
 
+def _training_enrollment_rows(db: Session, training_id: int) -> list[Enrollment]:
+    return (
+        db.query(Enrollment)
+        .filter(Enrollment.training_id == training_id)
+        .order_by(Enrollment.id.asc())
+        .all()
+    )
+
+
 def _counts_for_training(db: Session, training_id: int) -> tuple[int, int]:
     """
     Возвращает (active_cnt, reserve_cnt) по факту из БД.
@@ -97,6 +110,15 @@ def _counts_for_training(db: Session, training_id: int) -> tuple[int, int]:
         elif _is_reserve(st):
             reserve_cnt += 1
     return active_cnt, reserve_cnt
+
+
+def _build_amplua_context(training: Training, rows: list[Enrollment]) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
+    slots = build_amplua_position_snapshot(
+        positions=getattr(training, "amplua_positions", None),
+        enrollments=rows,
+    )
+    by_key = {str(slot["key"]): slot for slot in slots}
+    return slots, by_key
 
 
 
@@ -393,6 +415,7 @@ def enroll_user_to_training(
     user_id: int,
     is_paid: bool = False,
     price_tier_id: Optional[int] = None,
+    position_key: Optional[str] = None,
 ) -> Enrollment:
     training = _get_training(db, training_id)
 
@@ -426,6 +449,10 @@ def enroll_user_to_training(
             },
         )
 
+    training_is_amplua = is_amplua_training(training)
+    requested_position_key = str(position_key or "").strip() if training_is_amplua else ""
+    requested_position_key = requested_position_key or None
+
     existing = (
         db.query(Enrollment)
         .filter(Enrollment.training_id == training_id, Enrollment.user_id == user_id)
@@ -444,8 +471,48 @@ def enroll_user_to_training(
             raise AppException.conflict(ErrorCode.ALREADY_ENROLLED, "User already enrolled")
 
     main_cap, reserve_cap = _training_capacity(training)
-
     active_cnt, reserve_cnt = _counts_for_training(db, training_id)
+    rows = _training_enrollment_rows(db, training_id)
+
+    amplua_slots: list[dict[str, Any]] = []
+    amplua_by_key: dict[str, dict[str, Any]] = {}
+    if training_is_amplua:
+        amplua_slots, amplua_by_key = _build_amplua_context(training, rows)
+        main_cap = sum(int(slot.get("capacity", 0) or 0) for slot in amplua_slots)
+
+        if requested_position_key:
+            selected_slot = amplua_by_key.get(requested_position_key)
+            if not selected_slot:
+                raise AppException.validation(
+                    message="Выберите корректную позицию",
+                    details={
+                        "training_id": training_id,
+                        "requested_position_key": requested_position_key,
+                        "available_positions": [slot for slot in amplua_slots if slot.get("has_free_slots")],
+                        "position_slots": amplua_slots,
+                    },
+                )
+            if not selected_slot.get("has_free_slots"):
+                raise AppException.conflict(
+                    ErrorCode.TRAINING_FULL,
+                    f'На позиции "{selected_slot["label"]}" нет свободных мест',
+                    details={
+                        "training_id": training_id,
+                        "requested_position_key": requested_position_key,
+                        "requested_position_label": selected_slot["label"],
+                        "available_positions": [slot for slot in amplua_slots if slot.get("has_free_slots")],
+                        "position_slots": amplua_slots,
+                    },
+                )
+        else:
+            raise AppException.validation(
+                message="Для тренировки типа \"амплуа\" выберите позицию",
+                details={
+                    "training_id": training_id,
+                    "available_positions": [slot for slot in amplua_slots if slot.get("has_free_slots")],
+                    "position_slots": amplua_slots,
+                },
+            )
 
     status = ACTIVE_STATUS()
     is_reserve_flag = False
@@ -466,6 +533,8 @@ def enroll_user_to_training(
             setattr(existing, "is_paid", bool(is_paid))
         if hasattr(existing, "is_reserve"):
             setattr(existing, "is_reserve", bool(is_reserve_flag))
+        if hasattr(existing, "position_key"):
+            setattr(existing, "position_key", requested_position_key)
         if price_tier_id is not None and hasattr(existing, "price_tier_id"):
             setattr(existing, "price_tier_id", int(price_tier_id))
         # если есть cancelled_at — логично сбросить
@@ -486,6 +555,8 @@ def enroll_user_to_training(
         setattr(e, "is_paid", bool(is_paid))
     if hasattr(e, "is_reserve"):
         setattr(e, "is_reserve", bool(is_reserve_flag))
+    if hasattr(e, "position_key"):
+        setattr(e, "position_key", requested_position_key)
     if price_tier_id is not None and hasattr(e, "price_tier_id"):
         setattr(e, "price_tier_id", int(price_tier_id))
 

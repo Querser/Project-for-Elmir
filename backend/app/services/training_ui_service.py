@@ -9,6 +9,13 @@ from app.models.setting import Setting
 from app.models.level import Level
 from app.schemas.training import CANONICAL_LEVEL_NAMES
 from app.services.ban_service import get_active_ban
+from app.services.training_service import (
+    AMPLUA_TRAINING_TYPE,
+    build_amplua_position_snapshot,
+    get_amplua_position_label,
+    is_amplua_training,
+    normalize_training_type,
+)
 
 # Пытаемся подцепить твою модель price tiers (как ты её назвал в новых файлах)
 PriceTierModel = None
@@ -175,6 +182,7 @@ def _participant_payload(enrollment: Any, *, is_reserve: bool) -> dict[str, Any]
     return {
         "enrollment_id": getattr(enrollment, "id", None),
         "user_id": user_id,
+        "position_key": _safe_text(getattr(enrollment, "position_key", None)) or None,
         "first_name": first_name or None,
         "last_name": last_name or None,
         "username": username or None,
@@ -193,6 +201,8 @@ def build_training_ui_payload(
     include_participants: bool = True,
 ) -> Dict[str, Any]:
     training_id = getattr(training, "id", None)
+    training_type = normalize_training_type(getattr(training, "training_type", None))
+    is_amplua = training_type == AMPLUA_TRAINING_TYPE
 
     capacity_main = int(getattr(training, "capacity_main", 0) or 0)
     capacity_reserve = int(getattr(training, "capacity_reserve", 0) or 0)
@@ -202,6 +212,9 @@ def build_training_ui_payload(
     user_enrollment_status = "none"
     user_queue_position = None
     user_enrollment_id: Optional[int] = None
+    user_position_key: str | None = None
+    user_position_label: str | None = None
+    amplua_position_slots: list[dict[str, Any]] = []
     participants_main: list[dict[str, Any]] = []
     participants_reserve: list[dict[str, Any]] = []
 
@@ -243,13 +256,26 @@ def build_training_ui_payload(
                 # --- статус для UI (frontend ждёт main/reserve/none/cancelled) ---
                 user_enrollment_id = getattr(e, "id", None)
                 user_queue_position = getattr(e, "queue_position", None)
+                position_key = _safe_text(getattr(e, "position_key", None))
+                if position_key:
+                    user_position_key = position_key
+                    user_position_label = get_amplua_position_label(position_key) or None
 
                 if is_cancelled:
                     user_enrollment_status = "cancelled"
                 else:
                     user_enrollment_status = "reserve" if is_reserve else "main"
 
-    free_places = max(capacity_main - occupied_main, 0)
+    if is_amplua:
+        amplua_position_slots = build_amplua_position_snapshot(
+            positions=getattr(training, "amplua_positions", None),
+            enrollments=rows if EnrollmentModel is not None and training_id is not None else [],
+        )
+        occupied_main = sum(int(slot.get("occupied", 0) or 0) for slot in amplua_position_slots)
+        capacity_main = sum(int(slot.get("capacity", 0) or 0) for slot in amplua_position_slots)
+        free_places = sum(int(slot.get("free", 0) or 0) for slot in amplua_position_slots)
+    else:
+        free_places = max(capacity_main - occupied_main, 0)
 
     # --- price tiers ---
     tiers_payload: List[Dict[str, Any]] = []
@@ -342,6 +368,12 @@ def build_training_ui_payload(
         "price_max": float(pick.price_max),
         "final_price": float(pick.final_price),
         "picked_price_tier_id": pick.picked_tier_id,
+        "training_type": training_type,
+        "amplua_positions": getattr(training, "amplua_positions", None) if is_amplua else None,
+        "position_slots": amplua_position_slots,
+        "available_positions": [slot for slot in amplua_position_slots if slot.get("has_free_slots")],
+        "user_position_key": user_position_key,
+        "user_position_label": user_position_label,
         "cancel_deadline_at": deadline.isoformat().replace("+00:00", "Z") if deadline else None,
         "is_late_cancel": late_cancel,
         "can_cancel": can_cancel,

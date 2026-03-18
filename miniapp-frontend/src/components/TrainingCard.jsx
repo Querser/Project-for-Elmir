@@ -1,5 +1,7 @@
 import React, { useMemo } from 'react';
 
+const NOW_TS = Date.now();
+
 function num(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
@@ -38,11 +40,12 @@ export default function TrainingCard({ training, onClick, timeLabel }) {
     () => Math.max(0, num(training?.duration_minutes ?? training?.durationMinutes) ?? 0),
     [training],
   );
+
   const isFinished = useMemo(() => {
     if (!startAt) return false;
     const endAtMs = startAt.getTime() + durationMinutes * 60_000;
-    return Date.now() >= endAtMs;
-  }, [startAt, durationMinutes]);
+    return NOW_TS >= endAtMs;
+  }, [durationMinutes, startAt]);
 
   return (
     <article className="session-card" onClick={onClick} role="button" tabIndex={0}>

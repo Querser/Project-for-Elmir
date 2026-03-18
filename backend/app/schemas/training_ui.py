@@ -9,13 +9,13 @@ from pydantic import BaseModel, ConfigDict, Field
 class TrainingReadUI(BaseModel):
     """
     DTO под UI.
-    extra='allow' — чтобы не ломаться, если у Training есть дополнительные поля.
+    extra='allow' - чтобы не ломаться, если у Training есть дополнительные поля.
     """
+
     model_config = ConfigDict(from_attributes=True, extra="allow")
 
     id: int = Field(..., description="Training id")
 
-    # Бэк реально может отдавать оба поля (у тебя в ответах есть starts_at и start_at)
     starts_at: Optional[datetime] = None
     start_at: Optional[datetime] = None
 
@@ -28,17 +28,21 @@ class TrainingReadUI(BaseModel):
 
     capacity_main: Optional[int] = None
     capacity_reserve: Optional[int] = None
+    training_type: Optional[str] = None
+    amplua_positions: Optional[dict[str, int]] = None
 
-    # UI-поля (бэк уже отдаёт их)
     free_places: int = 0
     occupied_main: int = 0
     occupied_reserve: int = 0
     can_enroll: bool = False
+    can_enroll_reserve: bool = False
+    position_slots: list[dict[str, Any]] = Field(default_factory=list)
+    available_positions: list[dict[str, Any]] = Field(default_factory=list)
+    user_position_key: Optional[str] = None
+    user_position_label: Optional[str] = None
 
-    # НЕ зажимаем Literal — иначе легко поймать падение при новых статусах
     user_enrollment_status: str = "none"
 
-    # Бэк отдаёт массив: "price_tiers": []
     price_tiers: list[dict[str, Any]] = Field(default_factory=list)
 
 

@@ -1,22 +1,22 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { apiFetch } from '../api';
 
 /**
- * Иногда бек отдает UTF-8 байты, но они уже превращены в строку как Latin-1,
- * поэтому в JS приходит "Ð¢ÐµÑ..." вместо "Тре...".
- * Эта функция пытается восстановить нормальный UTF-8.
+ * РРЅРѕРіРґР° Р±РµРє РѕС‚РґР°РµС‚ UTF-8 Р±Р°Р№С‚С‹, РЅРѕ РѕРЅРё СѓР¶Рµ РїСЂРµРІСЂР°С‰РµРЅС‹ РІ СЃС‚СЂРѕРєСѓ РєР°Рє Latin-1,
+ * РїРѕСЌС‚РѕРјСѓ РІ JS РїСЂРёС…РѕРґРёС‚ "ГђВўГђВµГ‘..." РІРјРµСЃС‚Рѕ "РўСЂРµ...".
+ * Р­С‚Р° С„СѓРЅРєС†РёСЏ РїС‹С‚Р°РµС‚СЃСЏ РІРѕСЃСЃС‚Р°РЅРѕРІРёС‚СЊ РЅРѕСЂРјР°Р»СЊРЅС‹Р№ UTF-8.
  */
 function maybeFixUtf8Mojibake(value) {
   if (value == null) return '';
   const s = typeof value === 'string' || typeof value === 'number' ? String(value) : '';
   if (!s) return '';
-  // эвристика: типичные символы кракозябр
-  if (!/[ÐÑ]/.test(s)) return s;
+  // СЌРІСЂРёСЃС‚РёРєР°: С‚РёРїРёС‡РЅС‹Рµ СЃРёРјРІРѕР»С‹ РєСЂР°РєРѕР·СЏР±СЂ
+  if (!/[ГђГ‘]/.test(s)) return s;
 
   try {
     const bytes = new Uint8Array([...s].map((ch) => ch.charCodeAt(0)));
     const decoded = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
-    // если после декода появилась кириллица — значит стало лучше
+    // РµСЃР»Рё РїРѕСЃР»Рµ РґРµРєРѕРґР° РїРѕСЏРІРёР»Р°СЃСЊ РєРёСЂРёР»Р»РёС†Р° вЂ” Р·РЅР°С‡РёС‚ СЃС‚Р°Р»Рѕ Р»СѓС‡С€Рµ
     if (/[\u0400-\u04FF]/.test(decoded)) return decoded;
     return s;
   } catch {
@@ -162,6 +162,321 @@ function participantAvatarLetter(item) {
   return name ? name[0].toUpperCase() : '•';
 }
 
+function resolveMediaUrl(raw) {
+  const value = maybeFixUtf8Mojibake(raw ?? '').toString().trim();
+  if (!value) return '';
+  if (/^https?:\/\//i.test(value)) return value;
+  try {
+    return new URL(value, window.location.origin).toString();
+  } catch {
+    return value;
+  }
+}
+
+function textToArray(value) {
+  if (value == null) return [];
+  if (Array.isArray(value)) return value;
+  return [value];
+}
+
+function pickLabelFromObject(obj) {
+  if (!obj) return '';
+  if (typeof obj === 'string' || typeof obj === 'number') {
+    return maybeFixUtf8Mojibake(obj).toString().trim();
+  }
+
+  return maybeFixUtf8Mojibake(
+    obj?.full_name ??
+      obj?.fullName ??
+      obj?.name ??
+      obj?.title ??
+      obj?.username ??
+      obj?.login ??
+      obj?.label ??
+      '',
+  ).toString().trim();
+}
+
+function extractLabelList(value) {
+  return textToArray(value)
+    .map((item) => pickLabelFromObject(item))
+    .filter(Boolean);
+}
+
+function normalizeOptionalText(value) {
+  return maybeFixUtf8Mojibake(value ?? '').toString().trim();
+}
+
+function normalizePositionKey(value) {
+  return maybeFixUtf8Mojibake(value ?? '').toString().trim().toLowerCase();
+}
+
+function normalizePositionLabel(value, fallbackKey = '') {
+  const raw = maybeFixUtf8Mojibake(value ?? '').toString().trim();
+  const key = normalizePositionKey(fallbackKey || raw);
+  const map = {
+    'доигровка': 'доигровка',
+    doigrovka: 'доигровка',
+    outside_hitter: 'доигровка',
+    wing_spiker: 'доигровка',
+    'цб': 'ЦБ',
+    middle_blocker: 'ЦБ',
+    cb: 'ЦБ',
+    center_blocker: 'ЦБ',
+    'связка': 'связка',
+    setter: 'связка',
+    setter_spiker: 'связка',
+    'диагональный': 'диагональный',
+    diagonal: 'диагональный',
+    opposite: 'диагональный',
+    'либеро': 'либеро',
+    libero: 'либеро',
+  };
+
+  if (map[key]) return map[key];
+  if (raw) return raw;
+  return fallbackKey || '';
+}
+
+function normalizePositionCount(value) {
+  const n = toNumber(value);
+  return Number.isFinite(n) ? Math.max(0, Math.trunc(n)) : null;
+}
+
+function normalizePositionOption(entry, fallbackKey = '') {
+  if (entry == null) return null;
+
+  if (typeof entry === 'string' || typeof entry === 'number') {
+    const label = normalizePositionLabel(entry, fallbackKey);
+    const key = normalizePositionKey(entry || fallbackKey || label);
+    return key ? { key, label: label || key, free: null, total: null } : null;
+  }
+
+  if (typeof entry !== 'object') return null;
+
+  const keyRaw =
+    entry?.key ??
+    entry?.position_key ??
+    entry?.positionKey ??
+    entry?.code ??
+    entry?.slug ??
+    entry?.id ??
+    fallbackKey ??
+    '';
+  const labelRaw =
+    entry?.label ??
+    entry?.title ??
+    entry?.name ??
+    entry?.position_name ??
+    entry?.positionName ??
+    entry?.display_name ??
+    entry?.displayName ??
+    entry?.text ??
+    '';
+  const freeRaw =
+    entry?.free ??
+    entry?.free_slots ??
+    entry?.freeSlots ??
+    entry?.available ??
+    entry?.available_count ??
+    entry?.availableCount ??
+    entry?.slots_available ??
+    entry?.slotsAvailable ??
+    entry?.remaining ??
+    entry?.remaining_slots ??
+    entry?.remainingSlots ??
+    entry?.count ??
+    entry?.qty ??
+    null;
+  const totalRaw =
+    entry?.total ??
+    entry?.total_slots ??
+    entry?.totalSlots ??
+    entry?.capacity ??
+    entry?.max ??
+    entry?.limit ??
+    null;
+
+  const key = normalizePositionKey(keyRaw || labelRaw || fallbackKey);
+  if (!key) return null;
+
+  const label = normalizePositionLabel(labelRaw || keyRaw || fallbackKey, key);
+  const free = normalizePositionCount(freeRaw);
+  const total = normalizePositionCount(totalRaw);
+
+  return {
+    key,
+    label: label || key,
+    free,
+    total,
+  };
+}
+
+function extractPositionOptionsFromSource(source) {
+  if (source == null) return [];
+
+  const items = [];
+
+  if (Array.isArray(source)) {
+    source.forEach((item, index) => {
+      const normalized = normalizePositionOption(item, String(index));
+      if (normalized) items.push(normalized);
+    });
+  } else if (typeof source === 'object') {
+    Object.entries(source).forEach(([key, value]) => {
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        const normalized = normalizePositionOption({ key, ...value }, key);
+        if (normalized) items.push(normalized);
+        return;
+      }
+
+      const normalized = normalizePositionOption(
+        {
+          key,
+          label: key,
+          free: value,
+        },
+        key,
+      );
+      if (normalized) items.push(normalized);
+    });
+  } else {
+    const normalized = normalizePositionOption(source);
+    if (normalized) items.push(normalized);
+  }
+
+  const dedup = new Map();
+  items.forEach((item) => {
+    const prev = dedup.get(item.key);
+    if (!prev) {
+      dedup.set(item.key, item);
+      return;
+    }
+
+    const betterFree = prev.free != null ? prev.free : item.free;
+    const betterTotal = prev.total ?? item.total ?? null;
+    const betterLabel = prev.label || item.label || item.key;
+    dedup.set(item.key, {
+      ...prev,
+      ...item,
+      label: betterLabel,
+      free: betterFree,
+      total: betterTotal,
+    });
+  });
+
+  return Array.from(dedup.values())
+    .filter((item) => {
+      if (item.free == null) return true;
+      return item.free > 0;
+    })
+    .map((item) => ({
+      ...item,
+      label: normalizePositionLabel(item.label, item.key) || item.key,
+    }));
+}
+
+function mergePositionOptionLists(lists) {
+  const dedup = new Map();
+
+  lists.filter(Boolean).forEach((list) => {
+    list.forEach((item) => {
+      if (!item?.key) return;
+      const prev = dedup.get(item.key);
+      if (!prev) {
+        dedup.set(item.key, item);
+        return;
+      }
+
+      dedup.set(item.key, {
+        ...prev,
+        ...item,
+        label: item.label || prev.label || item.key,
+        free: prev.free != null ? prev.free : item.free,
+        total: prev.total != null ? prev.total : item.total,
+      });
+    });
+  });
+
+  return Array.from(dedup.values())
+    .filter((item) => {
+      if (item.free == null) return true;
+      return item.free > 0;
+    })
+    .map((item) => ({
+      ...item,
+      label: normalizePositionLabel(item.label, item.key) || item.key,
+    }));
+}
+
+function extractPositionOptionsFromTraining(trainingData) {
+  const available = extractPositionOptionsFromSource(
+    trainingData?.available_positions ??
+      trainingData?.availablePositions ??
+      trainingData?.available_positions_list ??
+      trainingData?.availablePositionsList ??
+      null,
+  );
+  const slots = extractPositionOptionsFromSource(
+    trainingData?.position_slots ?? trainingData?.positionSlots ?? trainingData?.positions ?? null,
+  );
+
+  return mergePositionOptionLists([available, slots]);
+}
+
+function extractPositionOptionsFromPayload(payload) {
+  const candidates = [
+    payload,
+    payload?.detail,
+    payload?.details,
+    payload?.detail?.details,
+    payload?.error,
+    payload?.error?.detail,
+    payload?.error?.details,
+    payload?.error?.detail?.details,
+  ];
+
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const source =
+      candidate?.available_positions ??
+      candidate?.availablePositions ??
+      candidate?.position_slots ??
+      candidate?.positionSlots ??
+      candidate?.available_positions_list ??
+      candidate?.availablePositionsList ??
+      null;
+    const options = mergePositionOptionLists([
+      extractPositionOptionsFromSource(candidate?.available_positions ?? candidate?.availablePositions ?? candidate?.available_positions_list ?? candidate?.availablePositionsList ?? null),
+      extractPositionOptionsFromSource(candidate?.position_slots ?? candidate?.positionSlots ?? null),
+      extractPositionOptionsFromSource(source),
+    ]);
+    if (options.length) return options;
+  }
+
+  return [];
+}
+
+function getPositionErrorMessage(payload) {
+  const candidates = [payload, payload?.detail, payload?.details, payload?.error, payload?.error?.detail, payload?.error?.details];
+
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    if (typeof candidate === 'string') return maybeFixUtf8Mojibake(candidate).toString().trim();
+    if (typeof candidate.message === 'string' && candidate.message.trim()) {
+      return maybeFixUtf8Mojibake(candidate.message).toString().trim();
+    }
+    if (typeof candidate.detail === 'string' && candidate.detail.trim()) {
+      return maybeFixUtf8Mojibake(candidate.detail).toString().trim();
+    }
+    if (candidate.error && typeof candidate.error.message === 'string' && candidate.error.message.trim()) {
+      return maybeFixUtf8Mojibake(candidate.error.message).toString().trim();
+    }
+  }
+
+  return '';
+}
+
 function resolveAvatarUrl(raw) {
   const value = maybeFixUtf8Mojibake(raw ?? '').toString().trim();
   if (!value) return '';
@@ -256,6 +571,11 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
   const [playerModalLoading, setPlayerModalLoading] = useState(false);
   const [playerModalError, setPlayerModalError] = useState('');
   const [playerModalProfile, setPlayerModalProfile] = useState(null);
+  const [activeMediaIndex, setActiveMediaIndex] = useState(0);
+  const [bookingError, setBookingError] = useState('');
+  const [bookingPositionOptions, setBookingPositionOptions] = useState([]);
+  const [bookingSelectedPositionKey, setBookingSelectedPositionKey] = useState('');
+  const videoRef = useRef(null);
 
   const openExternalLink = (url) => {
     if (!url) return;
@@ -265,15 +585,15 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
         tg.openLink(url);
         return;
       } catch {
-        // fallback ниже
+        // fallback РЅРёР¶Рµ
       }
     }
     window.open(url, '_blank', 'noopener,noreferrer');
   };
 
   const fetchLocationById = async (locId) => {
-    // ВАЖНО: у тебя НЕТ /api/v1/locations/{id}, поэтому работаем только со списками.
-    // Но сейчас списки возвращают лишь {id}, без name/address/coords — это ограничение бэка/БД.
+    // Р’РђР–РќРћ: Сѓ С‚РµР±СЏ РќР•Рў /api/v1/locations/{id}, РїРѕСЌС‚РѕРјСѓ СЂР°Р±РѕС‚Р°РµРј С‚РѕР»СЊРєРѕ СЃРѕ СЃРїРёСЃРєР°РјРё.
+    // РќРѕ СЃРµР№С‡Р°СЃ СЃРїРёСЃРєРё РІРѕР·РІСЂР°С‰Р°СЋС‚ Р»РёС€СЊ {id}, Р±РµР· name/address/coords вЂ” СЌС‚Рѕ РѕРіСЂР°РЅРёС‡РµРЅРёРµ Р±СЌРєР°/Р‘Р”.
     const urls = [
       '/api/v1/locations?limit=500&offset=0&only_with_trainings=true',
       '/api/v1/locations?limit=500&offset=0',
@@ -301,7 +621,7 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
 
       const tRaw = await apiFetch(`/api/v1/trainings/${trainingId}`);
 
-      // Чиним потенциальные кракозябры на ключевых текстах
+      // Р§РёРЅРёРј РїРѕС‚РµРЅС†РёР°Р»СЊРЅС‹Рµ РєСЂР°РєРѕР·СЏР±СЂС‹ РЅР° РєР»СЋС‡РµРІС‹С… С‚РµРєСЃС‚Р°С…
       const t = {
         ...tRaw,
         title: maybeFixUtf8Mojibake(tRaw?.title),
@@ -312,7 +632,7 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
       let locLabel = '';
       let locObj = null;
 
-      // 1) Пытаемся достать адрес/название из тренировки (если бек начнет это отдавать)
+      // 1) РџС‹С‚Р°РµРјСЃСЏ РґРѕСЃС‚Р°С‚СЊ Р°РґСЂРµСЃ/РЅР°Р·РІР°РЅРёРµ РёР· С‚СЂРµРЅРёСЂРѕРІРєРё (РµСЃР»Рё Р±РµРє РЅР°С‡РЅРµС‚ СЌС‚Рѕ РѕС‚РґР°РІР°С‚СЊ)
       locLabel = pickFirstNonEmptyString([
         t?.address,
         t?.location_address,
@@ -325,11 +645,11 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
         t?.placeName,
         t?.place_title,
         t?.placeTitle,
-        t?.location, // может быть строкой или объектом
-        t?.place, // может быть строкой или объектом
+        t?.location, // РјРѕР¶РµС‚ Р±С‹С‚СЊ СЃС‚СЂРѕРєРѕР№ РёР»Рё РѕР±СЉРµРєС‚РѕРј
+        t?.place, // РјРѕР¶РµС‚ Р±С‹С‚СЊ СЃС‚СЂРѕРєРѕР№ РёР»Рё РѕР±СЉРµРєС‚РѕРј
       ]);
 
-      // 2) Если location/place объектом — сохраняем
+      // 2) Р•СЃР»Рё location/place РѕР±СЉРµРєС‚РѕРј вЂ” СЃРѕС…СЂР°РЅСЏРµРј
       const directLoc = t?.location ?? t?.place ?? null;
       if (directLoc) {
         const directLabel = normalizeLocationLabel(directLoc);
@@ -337,18 +657,18 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
         if (typeof directLoc === 'object') locObj = directLoc;
       }
 
-      // 3) Если есть location_id — пробуем найти в списке
+      // 3) Р•СЃР»Рё РµСЃС‚СЊ location_id вЂ” РїСЂРѕР±СѓРµРј РЅР°Р№С‚Рё РІ СЃРїРёСЃРєРµ
       const locId = t?.location_id ?? t?.locationId ?? null;
       if (locId != null) {
         const found = await fetchLocationById(locId);
         if (found) {
-          // сейчас found = {id}, но если позже бек начнет отдавать поля — тут автоматически заработает
+          // СЃРµР№С‡Р°СЃ found = {id}, РЅРѕ РµСЃР»Рё РїРѕР·Р¶Рµ Р±РµРє РЅР°С‡РЅРµС‚ РѕС‚РґР°РІР°С‚СЊ РїРѕР»СЏ вЂ” С‚СѓС‚ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё Р·Р°СЂР°Р±РѕС‚Р°РµС‚
           const lbl = normalizeLocationLabel(found);
           if (lbl) locLabel = lbl;
           locObj = found;
         }
 
-        // Если вообще ничего нет — показываем юзер-френдли подпись (но НЕ используем её для карты)
+        // Р•СЃР»Рё РІРѕРѕР±С‰Рµ РЅРёС‡РµРіРѕ РЅРµС‚ вЂ” РїРѕРєР°Р·С‹РІР°РµРј СЋР·РµСЂ-С„СЂРµРЅРґР»Рё РїРѕРґРїРёСЃСЊ (РЅРѕ РќР• РёСЃРїРѕР»СЊР·СѓРµРј РµС‘ РґР»СЏ РєР°СЂС‚С‹)
         if (!locLabel) locLabel = `Локация #${locId}`;
       }
 
@@ -378,6 +698,83 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
     setPendingPaymentId(readPendingPaymentId(trainingId));
     setPaymentHint('');
   }, [trainingId]);
+
+  const mediaItems = useMemo(() => {
+    const items = [];
+    const videoUrl = resolveMediaUrl(training?.video_url);
+    const imageUrl = resolveMediaUrl(training?.image_url);
+
+    if (videoUrl) items.push({ type: 'video', src: videoUrl });
+    if (imageUrl) items.push({ type: 'image', src: imageUrl });
+
+    return items;
+  }, [training?.image_url, training?.video_url]);
+
+  const trainingType = useMemo(() => {
+    return maybeFixUtf8Mojibake(
+      training?.type ??
+        training?.training_type ??
+        training?.trainingType ??
+        training?.sport_type ??
+        training?.sportType ??
+        training?.format ??
+        '',
+    )
+      .toString()
+      .trim()
+      .toLowerCase();
+  }, [training?.format, training?.sportType, training?.sport_type, training?.trainingType, training?.training_type, training?.type]);
+
+  const isAmpLuaTraining =
+    trainingType.includes('амплуа') || trainingType.includes('amplua') || trainingType.includes('amp lua');
+  const ampLuaTrainingPositionOptions = useMemo(() => extractPositionOptionsFromTraining(training), [training]);
+
+  const hasMediaGallery = mediaItems.length > 1;
+  const activeMediaItem = mediaItems[activeMediaIndex] ?? mediaItems[0] ?? null;
+
+  useEffect(() => {
+    if (!mediaItems.length) {
+      setActiveMediaIndex(0);
+      return;
+    }
+
+    const nextIndex = mediaItems.findIndex((item) => item.type === 'video');
+    setActiveMediaIndex(nextIndex >= 0 ? nextIndex : 0);
+  }, [trainingId, mediaItems]);
+
+  useEffect(() => {
+    if (!bookingOpen || !isAmpLuaTraining) {
+      setBookingError('');
+      setBookingPositionOptions([]);
+      setBookingSelectedPositionKey('');
+      return;
+    }
+
+    setBookingError('');
+    setBookingPositionOptions(ampLuaTrainingPositionOptions);
+    setBookingSelectedPositionKey((prev) => {
+      const preferred = normalizePositionKey(training?.user_position_key ?? '');
+      if (preferred && ampLuaTrainingPositionOptions.some((item) => item.key === preferred)) return preferred;
+      if (prev && ampLuaTrainingPositionOptions.some((item) => item.key === prev)) return prev;
+      return ampLuaTrainingPositionOptions[0]?.key ?? '';
+    });
+  }, [ampLuaTrainingPositionOptions, bookingOpen, isAmpLuaTraining, training?.user_position_key]);
+
+  useEffect(() => {
+    if (!activeMediaItem || activeMediaItem.type !== 'video') return;
+    const node = videoRef.current;
+    if (!node) return;
+
+    const play = async () => {
+      try {
+        await node.play();
+      } catch {
+        // autoplay РјРѕР¶РµС‚ Р±С‹С‚СЊ РѕРіСЂР°РЅРёС‡РµРЅ РєР»РёРµРЅС‚РѕРј
+      }
+    };
+
+    play();
+  }, [activeMediaItem, activeMediaItem?.src, activeMediaItem?.type]);
 
   const openParticipantProfile = (userId) => {
     if (!userId) return;
@@ -440,6 +837,11 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
       telegramRaw: username,
     };
   }, [playerModalProfile]);
+
+  const selectedBookingPosition = useMemo(
+    () => bookingPositionOptions.find((item) => item.key === normalizePositionKey(bookingSelectedPositionKey)) ?? null,
+    [bookingPositionOptions, bookingSelectedPositionKey],
+  );
 
   const startAt = useMemo(
     () => parseDate(training?.starts_at ?? training?.start_at ?? training?.startsAt ?? training?.startAt),
@@ -555,7 +957,7 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
     return { lat: null, lon: null };
   }, [training, locationObj]);
 
-  // НЕ пытаемся строить карту по заглушке "Локация #1"
+  // РќР• РїС‹С‚Р°РµРјСЃСЏ СЃС‚СЂРѕРёС‚СЊ РєР°СЂС‚Сѓ РїРѕ Р·Р°РіР»СѓС€РєРµ "Р›РѕРєР°С†РёСЏ #1"
   const mapTextLabel = useMemo(() => {
     const s = (locationLabel || '').trim();
     if (!s) return '';
@@ -654,6 +1056,28 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
     return `${Math.round(n)} ₽`;
   }, [training]);
 
+  const adminNames = useMemo(() => {
+    return [
+      ...extractLabelList(training?.administrators),
+      ...extractLabelList(training?.admins),
+      ...extractLabelList(training?.admin_names),
+      ...extractLabelList(training?.responsibles),
+      ...extractLabelList(training?.organizers),
+      ...extractLabelList(training?.curators),
+    ].filter((value, index, array) => array.indexOf(value) === index);
+  }, [training]);
+
+  const additionalNotes = useMemo(() => {
+    const candidates = [
+      normalizeOptionalText(training?.rules_text),
+      normalizeOptionalText(training?.additional_text),
+      normalizeOptionalText(training?.notes),
+      normalizeOptionalText(training?.comment),
+      normalizeOptionalText(training?.extra_info),
+    ].filter(Boolean);
+    return candidates[0] || '';
+  }, [training]);
+
   const checkPaymentStatus = async ({ silent = false } = {}) => {
     if (!trainingId || !pendingPaymentId) return;
 
@@ -737,6 +1161,7 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
     }
 
     if (canEnroll || (canEnrollReserve && isReserveAvailable)) {
+      setBookingError('');
       setBookingOpen(true);
     }
   };
@@ -745,7 +1170,7 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
     if (!trainingId) return;
     try {
       setSaving(true);
-      setError('');
+      setBookingError('');
       setPaymentHint('');
 
       const payload = {
@@ -754,6 +1179,15 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
 
       const tierId = training?.picked_price_tier_id ?? null;
       if (tierId != null) payload.price_tier_id = tierId;
+
+      if (isAmpLuaTraining) {
+        const selectedPositionKey = normalizePositionKey(bookingSelectedPositionKey);
+        if (!selectedPositionKey) {
+          setBookingError('Выберите позицию для записи.');
+          return;
+        }
+        payload.position_key = selectedPositionKey;
+      }
 
       try {
         const returnUrl = new URL(window.location.href);
@@ -781,7 +1215,30 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
       setBookingOpen(false);
       openExternalLink(confirmationUrl);
     } catch (err) {
-      setError(err?.message || 'Не удалось записаться');
+      const payload = err?.payload ?? null;
+      const availableFromError = extractPositionOptionsFromPayload(payload);
+      if (availableFromError.length) {
+        setBookingPositionOptions(availableFromError);
+        setBookingSelectedPositionKey((prev) => {
+          if (prev && availableFromError.some((item) => item.key === prev)) return prev;
+          const preferred = normalizePositionKey(training?.user_position_key ?? '');
+          if (preferred && availableFromError.some((item) => item.key === preferred)) return preferred;
+          return availableFromError[0]?.key ?? '';
+        });
+      }
+
+      const friendlyMessage = getPositionErrorMessage(payload) || err?.message || 'Не удалось записаться';
+      if (availableFromError.length) {
+        setBookingError(
+          friendlyMessage.includes('пози')
+            ? friendlyMessage
+            : 'Выбранная позиция больше недоступна. Выберите другую позицию из списка ниже.',
+        );
+        setBookingOpen(true);
+        return;
+      }
+
+      setBookingError(friendlyMessage);
     } finally {
       setSaving(false);
     }
@@ -807,24 +1264,47 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
     }
   };
 
-  const img =
-    training?.image_url ||
-    'https://images.unsplash.com/photo-1521412644187-c49fa049e84d?auto=format&fit=crop&w=1200&q=60';
-
   return (
     <>
       <section className="screen active" id="screen-session">
         {loading ? (
           <div className="loader">Загрузка…</div>
         ) : error ? (
-            <div className="empty-state" style={{ marginTop: 18 }}>
-              <div className="empty-ico">⚠️</div>
-              <h3>Ошибка</h3>
-              <p>{error}</p>
-            </div>
+          <div className="empty-state" style={{ marginTop: 18 }}>
+            <div className="empty-ico">⚠️</div>
+            <h3>Ошибка</h3>
+            <p>{error}</p>
+          </div>
         ) : training ? (
           <>
-            <div className="hero-image" style={{ backgroundImage: `url(${img})` }}>
+            <div className="hero-image hero-image--media">
+              <div className="hero-media">
+                {activeMediaItem?.type === 'video' ? (
+                  <video
+                    ref={videoRef}
+                    className="hero-media-video"
+                    src={activeMediaItem.src}
+                    autoPlay
+                    muted
+                    playsInline
+                    loop
+                    preload="metadata"
+                    poster={resolveMediaUrl(training?.image_url) || undefined}
+                    controls={false}
+                  />
+                ) : activeMediaItem?.type === 'image' ? (
+                  <img
+                    className="hero-media-image"
+                    src={activeMediaItem.src}
+                    alt={training?.title || 'Тренировка'}
+                  />
+                ) : (
+                  <div className="hero-media-empty">
+                    <span>Медиа недоступно</span>
+                  </div>
+                )}
+              </div>
+
               <div className="hero-top">
                 <button className="back-btn" type="button" onClick={onBack} aria-label="Назад">
                   <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -842,6 +1322,35 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
 
               <div className="hero-time-pill">{timePill}</div>
 
+              {hasMediaGallery ? (
+                <>
+                  <button
+                    className="hero-media-nav hero-media-nav-left"
+                    type="button"
+                    onClick={() => {
+                      setActiveMediaIndex((prev) => (prev - 1 + mediaItems.length) % mediaItems.length);
+                    }}
+                    aria-label="Предыдущее медиа"
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M15 18l-6-6 6-6" />
+                    </svg>
+                  </button>
+                  <button
+                    className="hero-media-nav hero-media-nav-right"
+                    type="button"
+                    onClick={() => {
+                      setActiveMediaIndex((prev) => (prev + 1) % mediaItems.length);
+                    }}
+                    aria-label="Следующее медиа"
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M9 18l6-6-6-6" />
+                    </svg>
+                  </button>
+                </>
+              ) : null}
+
               <div className="hero-bottom-chips">
                 {levelChips.map((lvl, i) => (
                   <span key={`${lvl}-${i}`} className="session-chip chip-level-light">
@@ -851,12 +1360,12 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
               </div>
             </div>
 
-            <div className="details-card">
+            <div className="details-card details-card--intro">
               <div className="details-title">{training?.title || 'Тренировка'}</div>
               {training?.description ? (
-                <p className="details-note" style={{ marginTop: 10 }}>
+                <div className="details-copy" style={{ marginTop: 10 }}>
                   {training.description}
-                </p>
+                </div>
               ) : null}
               {tiers.length ? (
                 <ul className="details-list">
@@ -869,7 +1378,8 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
               ) : null}
             </div>
 
-            <div className="details-card">
+            <div className="details-card details-card--schedule">
+              <div className="details-card-title">Дата и время</div>
               <div className="label-row">
                 <span className="label-muted">Дата</span>
                 <span className="label-strong">{dateLabel}</span>
@@ -882,19 +1392,26 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
                 <span className="label-muted">Тренер</span>
                 <span className="label-strong">{training?.coach_name || 'Без тренера'}</span>
               </div>
-              <div className="label-row">
+            </div>
+
+            <div className="details-card details-card--price">
+              <div className="details-card-title">Стоимость</div>
+              <div className="label-row" style={{ marginBottom: 0 }}>
                 <span className="label-muted">Стоимость</span>
                 <span className="label-strong">{priceLabel || '—'}</span>
               </div>
+            </div>
+
+            <div className="details-card details-card--address">
+              <div className="details-card-title">Адрес</div>
               <div className="label-row">
                 <span className="label-muted">Адрес</span>
                 <span className="label-strong">{locationLabel || 'Адрес уточняется'}</span>
               </div>
 
-              {/* Yandex Map Widget */}
               {yandexMapSrc ? (
-                <div style={{ marginTop: 12 }}>
-                  <div style={{ borderRadius: 16, overflow: 'hidden' }}>
+                <div className="map-embed" style={{ marginTop: 12 }}>
+                  <div className="map-embed-frame">
                     <iframe
                       title="Yandex Map"
                       src={yandexMapSrc}
@@ -921,18 +1438,78 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
                     </div>
                   ) : null}
                 </div>
+              ) : (
+                <p className="details-note" style={{ marginTop: 10 }}>
+                  Карта появится, когда в API локаций/тренировок будут передаваться адрес или координаты.
+                </p>
+              )}
+            </div>
+
+            {adminNames.length ? (
+              <div className="details-card details-card--admins">
+                <div className="details-card-title">Администраторы</div>
+                <div className="details-tags" role="list" aria-label="Администраторы">
+                  {adminNames.map((name) => (
+                    <span key={name} className="details-tag" role="listitem">
+                      {name}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            <div className="details-card details-card--cta">
+              <button className="primary-btn" type="button" onClick={openEnrollFlow} disabled={enrollButtonDisabled}>
+                {saving
+                  ? 'Подождите…'
+                  : checkingPayment
+                    ? 'Проверяем оплату…'
+                    : enrollButtonLabel}
+              </button>
+
+              {isEnrolled && calendarHref ? (
+                <button
+                  className="secondary-btn"
+                  type="button"
+                  onClick={() => openExternalLink(calendarHref)}
+                  style={{ width: '100%', marginTop: 10 }}
+                >
+                  Добавить в календарь
+                </button>
               ) : null}
 
-              {!yandexMapSrc ? (
-                <p className="details-note" style={{ marginTop: 10 }}>
-                  Карта появится, когда в API локаций/тренировок будут передаваться адрес или координаты (сейчас в БД
-                  locations только id).
+              {isEnrolled ? (
+                <p className="hint">{enrolledStatusLabel}</p>
+              ) : (
+                <p className="hint">
+                  {participantsTotal > 0 ? `Уже записано: ${participantsTotal}` : 'Пока никто не записался — будьте первым!'}
+                </p>
+              )}
+              {cancelBlockedHint ? (
+                <p className="hint" style={{ color: 'var(--danger)' }}>
+                  {cancelBlockedHint}
                 </p>
               ) : null}
-
-              <p className="details-note">
-                Точное количество участников и финальная стоимость рассчитываются перед началом тренировки.
-              </p>
+              {isTrainingFinished ? (
+                <p className="hint" style={{ color: 'var(--danger)' }}>
+                  Тренировка уже закончилась.
+                </p>
+              ) : null}
+              {userHasActiveBan ? (
+                <p className="hint" style={{ color: 'var(--danger)' }}>
+                  У вас активный бан. Нажмите кнопку записи, чтобы посмотреть причину.
+                </p>
+              ) : null}
+              {hasLevelBlock ? (
+                <p className="hint" style={{ color: 'var(--danger)' }}>
+                  {userLevelBlockReason}
+                </p>
+              ) : null}
+              {pendingPaymentId ? (
+                <p className="hint" style={{ color: 'var(--primary)' }}>
+                  {paymentHint || 'У вас есть незавершенный платеж. Нажмите кнопку ниже, чтобы проверить статус.'}
+                </p>
+              ) : null}
             </div>
 
             <div className="participants-card">
@@ -1025,56 +1602,13 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
                 )}
               </div>
 
-              {isEnrolled ? (
-                <p className="hint">{enrolledStatusLabel}</p>
-              ) : (
-                <p className="hint">
-                  {participantsTotal > 0 ? `Уже записано: ${participantsTotal}` : 'Пока никто не записался — будьте первым!'}
-                </p>
-              )}
-              {cancelBlockedHint ? (
-                <p className="hint" style={{ color: 'var(--danger)' }}>
-                  {cancelBlockedHint}
-                </p>
-              ) : null}
-              {isTrainingFinished ? (
-                <p className="hint" style={{ color: 'var(--danger)' }}>
-                  Тренировка уже закончилась.
-                </p>
-              ) : null}
-              {userHasActiveBan ? (
-                <p className="hint" style={{ color: 'var(--danger)' }}>
-                  У вас активный бан. Нажмите кнопку записи, чтобы посмотреть причину.
-                </p>
-              ) : null}
-              {hasLevelBlock ? (
-                <p className="hint" style={{ color: 'var(--danger)' }}>
-                  {userLevelBlockReason}
-                </p>
-              ) : null}
-              {pendingPaymentId ? (
-                <p className="hint" style={{ color: 'var(--primary)' }}>
-                  {paymentHint || 'У вас есть незавершенный платеж. Нажмите кнопку ниже, чтобы проверить статус.'}
-                </p>
-              ) : null}
             </div>
 
-            <button className="primary-btn" type="button" onClick={openEnrollFlow} disabled={enrollButtonDisabled}>
-              {saving
-                ? '\u041f\u043e\u0434\u043e\u0436\u0434\u0438\u0442\u0435\u2026'
-                : checkingPayment
-                  ? '\u041f\u0440\u043e\u0432\u0435\u0440\u044f\u0435\u043c \u043e\u043f\u043b\u0430\u0442\u0443\u2026'
-                  : enrollButtonLabel}
-            </button>
-            {isEnrolled && calendarHref ? (
-              <button
-                className="secondary-btn"
-                type="button"
-                onClick={() => openExternalLink(calendarHref)}
-                style={{ width: '100%', marginTop: 10 }}
-              >
-                Добавить в календарь
-              </button>
+            {additionalNotes ? (
+              <div className="details-card details-card--extra">
+                <div className="details-card-title">Дополнительно</div>
+                <div className="details-copy">{additionalNotes}</div>
+              </div>
             ) : null}
           </>
         ) : null}
@@ -1122,14 +1656,77 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
                   Основные места заняты. При записи вы попадёте в резерв.
                 </p>
               ) : null}
+
+              {bookingError && !isAmpLuaTraining ? (
+                <div className="modal-warning" style={{ marginTop: 10, marginBottom: 0 }}>
+                  <span>⚠️</span>
+                  <span>{bookingError}</span>
+                </div>
+              ) : null}
+
+              {isAmpLuaTraining ? (
+                <div className="booking-position-step" style={{ marginTop: 14 }}>
+                  <div className="details-card-title" style={{ marginBottom: 8 }}>
+                    Выберите позицию
+                  </div>
+
+                  {bookingError ? (
+                    <div className="modal-warning" style={{ marginBottom: 10 }}>
+                      <span>⚠️</span>
+                      <span>{bookingError}</span>
+                    </div>
+                  ) : null}
+
+                  {bookingPositionOptions.length ? (
+                    <div className="booking-position-list">
+                      {bookingPositionOptions.map((option) => {
+                        const isSelected = option.key === normalizePositionKey(bookingSelectedPositionKey);
+                        const freeLabel = option.free != null ? `свободно: ${option.free}` : 'свободно: доступно';
+                        return (
+                          <button
+                            key={option.key}
+                            type="button"
+                            className={`booking-position-option${isSelected ? ' is-selected' : ''}`}
+                            onClick={() => {
+                              setBookingSelectedPositionKey(option.key);
+                              setBookingError('');
+                            }}
+                          >
+                            <span className="booking-position-option-main">
+                              <span className="booking-position-option-label">{option.label}</span>
+                              <span className="booking-position-option-meta">{freeLabel}</span>
+                            </span>
+                            {isSelected ? <span className="booking-position-option-check">✓</span> : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p className="hint" style={{ textAlign: 'left', marginTop: 0 }}>
+                      Сейчас нет свободных позиций для записи.
+                    </p>
+                  )}
+
+                  {selectedBookingPosition ? (
+                    <p className="hint" style={{ textAlign: 'left' }}>
+                      Выбрано: {selectedBookingPosition.label}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
 
             <div className="modal-actions">
               <button className="secondary-btn" type="button" onClick={() => setBookingOpen(false)} disabled={saving}>
                 Отмена
               </button>
-              <button className="primary-btn" type="button" onClick={doEnroll} disabled={saving}>
-                {'\u041f\u0435\u0440\u0435\u0439\u0442\u0438 \u043a \u043e\u043f\u043b\u0430\u0442\u0435'}
+              <button
+                className="primary-btn"
+                type="button"
+                onClick={doEnroll}
+                disabled={saving || (isAmpLuaTraining && !bookingPositionOptions.length)}
+              >
+                {'Перейти к оплате'}
               </button>
             </div>
           </div>

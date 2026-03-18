@@ -99,6 +99,8 @@ def _training_to_dict(t: Any) -> dict[str, Any]:
         'price': _normalize_json(getattr(t, 'price', None)),
         'capacity_main': getattr(t, 'capacity_main', None),
         'capacity_reserve': getattr(t, 'capacity_reserve', None),
+        'training_type': getattr(t, 'training_type', None),
+        'amplua_positions': getattr(t, 'amplua_positions', None),
         'coach_name': getattr(t, 'coach_name', None),
         'image_url': getattr(t, 'image_url', None),
         'video_url': getattr(t, 'video_url', None),
