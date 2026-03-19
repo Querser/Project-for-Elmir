@@ -11,7 +11,9 @@ from app.core.config import get_settings
 from app.core.deps import get_current_admin_user_any, get_db
 from app.core.responses import success_response
 from app.services.telegram_bot_service import (
+    begin_telegram_webhook_response_mode,
     delete_bot_webhook,
+    finish_telegram_webhook_response_mode,
     handle_telegram_update,
     set_bot_webhook,
     webhook_status,
@@ -58,7 +60,26 @@ def telegram_webhook(
         if not provided:
             log.warning("Telegram webhook called without secret header while secret is configured")
 
-    result = handle_telegram_update(db, payload)
+    tokens = begin_telegram_webhook_response_mode()
+    try:
+        result = handle_telegram_update(db, payload)
+    finally:
+        queued_commands = finish_telegram_webhook_response_mode(tokens)
+
+    if queued_commands:
+        command = queued_commands[0]
+        if len(queued_commands) > 1:
+            log.warning(
+                "Telegram webhook queued %s response methods, returning only first method=%s",
+                len(queued_commands),
+                command.get("method"),
+            )
+        _diag(
+            f"webhook_response_method update_id={update_id} method={command.get('method')} "
+            f"chat_id={command.get('chat_id')}"
+        )
+        return command
+
     log.info(
         "Telegram webhook handled update_id=%s handled=%s kind=%s reason=%s",
         update_id,

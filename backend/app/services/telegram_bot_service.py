@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+from contextvars import ContextVar, Token
 from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -64,7 +65,7 @@ class TelegramBotAPI:
             method="POST",
         )
         try:
-            with urlopen(req, timeout=15) as resp:
+            with urlopen(req, timeout=_telegram_api_timeout_seconds()) as resp:
                 raw = resp.read().decode("utf-8", errors="replace")
             data = json.loads(raw)
             if not data.get("ok"):
@@ -100,6 +101,8 @@ class TelegramBotAPI:
         }
         if reply_markup is not None:
             payload["reply_markup"] = reply_markup
+        if _enqueue_webhook_method("sendMessage", payload):
+            return True
         result = self._call("sendMessage", payload)
         return bool(result.get("ok"))
 
@@ -107,6 +110,8 @@ class TelegramBotAPI:
         payload: dict[str, Any] = {"callback_query_id": callback_query_id}
         if text:
             payload["text"] = text
+        if _enqueue_webhook_method("answerCallbackQuery", payload):
+            return True
         result = self._call("answerCallbackQuery", payload)
         return bool(result.get("ok"))
 
@@ -172,6 +177,11 @@ class TelegramBotAPI:
 _bot_api = TelegramBotAPI()
 _branding_applied = False
 _BOOT_WEBAPP_VERSION = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+_WEBHOOK_RESPONSE_MODE: ContextVar[bool] = ContextVar("telegram_webhook_response_mode", default=False)
+_WEBHOOK_RESPONSE_COMMANDS: ContextVar[list[dict[str, Any]] | None] = ContextVar(
+    "telegram_webhook_response_commands",
+    default=None,
+)
 
 
 def ensure_telegram_branding() -> None:
@@ -237,6 +247,47 @@ def _log_preview(value: Any, *, limit: int = 160) -> str:
 
 def _diag(message: str) -> None:
     print(f"[TELEGRAM_DIAG] {message}", flush=True)
+
+
+def _telegram_api_timeout_seconds() -> float:
+    raw = (os.getenv("TELEGRAM_API_TIMEOUT_SECONDS") or "4").strip()
+    try:
+        value = float(raw)
+    except Exception:
+        value = 4.0
+    return max(1.0, min(value, 30.0))
+
+
+def _webhook_mode_enabled() -> bool:
+    return bool(_WEBHOOK_RESPONSE_MODE.get(False))
+
+
+def begin_telegram_webhook_response_mode() -> tuple[Token, Token]:
+    mode_token = _WEBHOOK_RESPONSE_MODE.set(True)
+    queue_token = _WEBHOOK_RESPONSE_COMMANDS.set([])
+    return mode_token, queue_token
+
+
+def finish_telegram_webhook_response_mode(tokens: tuple[Token, Token]) -> list[dict[str, Any]]:
+    mode_token, queue_token = tokens
+    commands = list(_WEBHOOK_RESPONSE_COMMANDS.get() or [])
+    _WEBHOOK_RESPONSE_COMMANDS.reset(queue_token)
+    _WEBHOOK_RESPONSE_MODE.reset(mode_token)
+    return commands
+
+
+def _enqueue_webhook_method(method: str, payload: dict[str, Any]) -> bool:
+    if not _webhook_mode_enabled():
+        return False
+    queue = _WEBHOOK_RESPONSE_COMMANDS.get()
+    if queue is None:
+        return False
+    queue.append({"method": method, **payload})
+    _diag(
+        f"webhook_queue method={method} chat_id={payload.get('chat_id')} "
+        f"text={_log_preview(payload.get('text'))!r}"
+    )
+    return True
 
 
 def _safe_username(username: str | None) -> str | None:
@@ -472,6 +523,9 @@ def send_ban_notice_to_user(db: Session, *, user_id: int) -> bool:
 
 
 def sync_telegram_avatar_for_user(db: Session, user: User) -> None:
+    if _webhook_mode_enabled():
+        _diag(f"avatar_sync_skipped_in_webhook tg_id={getattr(user, 'telegram_id', None)}")
+        return
     if not hasattr(user, "avatar_url"):
         return
     tg_id = int(getattr(user, "telegram_id", 0) or 0)
