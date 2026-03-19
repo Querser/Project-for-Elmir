@@ -22,7 +22,6 @@ const FIELD_LABELS = {
   location_name: 'Локация',
   location_id: 'Локация',
   image_url: 'Ссылка на изображение',
-  video_url: 'Ссылка на видео',
 
   // Notifications
   text: 'Текст',

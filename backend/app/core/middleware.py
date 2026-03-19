@@ -16,7 +16,14 @@ from app.services.metrics_service import MetricsService
 log = logging.getLogger("app.middleware")
 
 _TRAINING_CALENDAR_ICS_RE = re.compile(r"^/api/v1/trainings/\d+/calendar\.ics/?$")
-_TELEGRAM_WEBHOOK_PATHS = {"/api/v1/telegram/webhook", "/api/v1/telegram/webhook/"}
+_TELEGRAM_WEBHOOK_PATHS = {
+    "/api/v1/telegram",
+    "/api/v1/telegram/",
+    "/api/v1/telegram/update",
+    "/api/v1/telegram/update/",
+    "/api/v1/telegram/webhook",
+    "/api/v1/telegram/webhook/",
+}
 
 
 def _env_truthy(name: str, default: bool = False) -> bool:

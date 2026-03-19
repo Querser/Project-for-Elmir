@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -17,6 +18,7 @@ from app.services.telegram_bot_service import (
 )
 
 router = APIRouter(prefix="/telegram", tags=["telegram"])
+log = logging.getLogger("app.telegram.webhook")
 
 
 class WebhookConfigIn(BaseModel):
@@ -34,11 +36,24 @@ def telegram_webhook(
     expected_secret = (settings.telegram_bot_webhook_secret or "").strip()
     if expected_secret:
         provided = (request.headers.get("X-Telegram-Bot-Api-Secret-Token") or "").strip()
-        if provided != expected_secret:
+        if provided and provided != expected_secret:
             raise HTTPException(status_code=403, detail="Invalid webhook secret")
+        if not provided:
+            log.warning("Telegram webhook called without secret header while secret is configured")
 
     result = handle_telegram_update(db, payload)
     return {"ok": True, "result": result}
+
+
+@router.post("", response_model=dict)
+@router.post("/", response_model=dict)
+@router.post("/update", response_model=dict)
+def telegram_webhook_compat(
+    payload: dict[str, Any],
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    return telegram_webhook(payload=payload, request=request, db=db)
 
 
 @router.get("/webhook/status", response_model=dict)
@@ -69,4 +84,3 @@ def telegram_remove_webhook(
 ) -> dict[str, Any]:
     result = delete_bot_webhook()
     return success_response(result)
-

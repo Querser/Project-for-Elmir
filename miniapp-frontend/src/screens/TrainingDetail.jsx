@@ -725,6 +725,15 @@ function getPositionErrorMessage(payload) {
   return '';
 }
 
+function getBookingPositionTitle(option) {
+  const key = option?.key ?? '';
+  const normalized = normalizePositionLabel(
+    option?.positionLabel ?? option?.position_label ?? option?.label ?? key,
+    key,
+  );
+  return normalized || (option?.label || key || 'Позиция');
+}
+
 function resolveAvatarUrl(raw) {
   const value = maybeFixUtf8Mojibake(raw ?? '').toString().trim();
   if (!value) return '';
@@ -829,7 +838,6 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
   const [playerModalLoading, setPlayerModalLoading] = useState(false);
   const [playerModalError, setPlayerModalError] = useState('');
   const [playerModalProfile, setPlayerModalProfile] = useState(null);
-  const [activeMediaIndex, setActiveMediaIndex] = useState(0);
   const [bookingError, setBookingError] = useState('');
   const [bookingPositionOptions, setBookingPositionOptions] = useState([]);
   const [bookingSelectedPositionKey, setBookingSelectedPositionKey] = useState('');
@@ -963,6 +971,10 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
     if (firstImage?.src) return firstImage.src;
     return resolveMediaUrl(training?.image_url) || '';
   }, [mediaItems, training?.image_url]);
+  const activeMediaItem = useMemo(() => {
+    const firstImage = mediaItems.find((item) => item.type === 'image');
+    return firstImage || mediaItems[0] || null;
+  }, [mediaItems]);
 
   const trainingType = useMemo(() => {
     return maybeFixUtf8Mojibake(
@@ -982,19 +994,6 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
   const isAmpLuaTraining =
     trainingType.includes('амплуа') || trainingType.includes('amplua') || trainingType.includes('amp lua');
   const ampLuaTrainingPositionOptions = useMemo(() => extractPositionOptionsFromTraining(training), [training]);
-
-  const hasMediaGallery = mediaItems.length > 1;
-  const activeMediaItem = mediaItems[activeMediaIndex] ?? mediaItems[0] ?? null;
-
-  useEffect(() => {
-    if (!mediaItems.length) {
-      setActiveMediaIndex(0);
-      return;
-    }
-
-    const nextIndex = mediaItems.findIndex((item) => item.type === 'video');
-    setActiveMediaIndex(nextIndex >= 0 ? nextIndex : 0);
-  }, [trainingId, mediaItems]);
 
   useEffect(() => {
     if (!bookingOpen || !isAmpLuaTraining) {
@@ -1107,6 +1106,64 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
       ) ?? null,
     [bookingPositionOptions, bookingSelectedPositionKey],
   );
+  const bookingPositionGroups = useMemo(() => {
+    const groups = {
+      team1: [],
+      team2: [],
+      other: [],
+    };
+
+    bookingPositionOptions.forEach((option) => {
+      const teamNumber =
+        Number(option?.teamNumber) ||
+        inferTeamNumberFromText(option?.teamLabel) ||
+        inferTeamNumberFromText(option?.teamKey) ||
+        inferTeamNumberFromPositionKey(option?.key);
+
+      if (teamNumber === 1) {
+        groups.team1.push(option);
+      } else if (teamNumber === 2) {
+        groups.team2.push(option);
+      } else {
+        groups.other.push(option);
+      }
+    });
+
+    const byLabel = (a, b) => {
+      const aLabel = normalizePositionLabel(a?.label ?? '', a?.key ?? '');
+      const bLabel = normalizePositionLabel(b?.label ?? '', b?.key ?? '');
+      return aLabel.localeCompare(bLabel, 'ru');
+    };
+    groups.team1.sort(byLabel);
+    groups.team2.sort(byLabel);
+    groups.other.sort(byLabel);
+
+    return groups;
+  }, [bookingPositionOptions]);
+  const renderBookingPositionOption = (option) => {
+    const optionSelectionKey = option.selectionKey || option.key;
+    const isSelected = normalizePositionKey(optionSelectionKey) === normalizePositionKey(bookingSelectedPositionKey);
+    const freeLabel = option.free != null ? `свободно: ${option.free}` : 'свободно: доступно';
+    const optionTitle = getBookingPositionTitle(option);
+
+    return (
+      <button
+        key={optionSelectionKey}
+        type="button"
+        className={`booking-position-option${isSelected ? ' is-selected' : ''}`}
+        onClick={() => {
+          setBookingSelectedPositionKey(optionSelectionKey);
+          setBookingError('');
+        }}
+      >
+        <span className="booking-position-option-main">
+          <span className="booking-position-option-label">{optionTitle}</span>
+          <span className="booking-position-option-meta">{freeLabel}</span>
+        </span>
+        {isSelected ? <span className="booking-position-option-check">✓</span> : null}
+      </button>
+    );
+  };
 
   const startAt = useMemo(
     () => parseDate(training?.starts_at ?? training?.start_at ?? training?.startsAt ?? training?.startAt),
@@ -1598,35 +1655,6 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
 
               <div className="hero-time-pill">{timePill}</div>
 
-              {hasMediaGallery ? (
-                <>
-                  <button
-                    className="hero-media-nav hero-media-nav-left"
-                    type="button"
-                    onClick={() => {
-                      setActiveMediaIndex((prev) => (prev - 1 + mediaItems.length) % mediaItems.length);
-                    }}
-                    aria-label="Предыдущее медиа"
-                  >
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                      <path d="M15 18l-6-6 6-6" />
-                    </svg>
-                  </button>
-                  <button
-                    className="hero-media-nav hero-media-nav-right"
-                    type="button"
-                    onClick={() => {
-                      setActiveMediaIndex((prev) => (prev + 1) % mediaItems.length);
-                    }}
-                    aria-label="Следующее медиа"
-                  >
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                      <path d="M9 18l6-6-6-6" />
-                    </svg>
-                  </button>
-                </>
-              ) : null}
-
               <div className="hero-bottom-chips">
                 {levelChips.map((lvl, i) => (
                   <span key={`${lvl}-${i}`} className="session-chip chip-level-light">
@@ -1954,28 +1982,33 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
                   ) : null}
 
                   {bookingPositionOptions.length ? (
-                    <div className="booking-position-list">
-                      {bookingPositionOptions.map((option) => {
-                        const isSelected = option.selectionKey === normalizePositionKey(bookingSelectedPositionKey);
-                        const freeLabel = option.free != null ? `свободно: ${option.free}` : 'свободно: доступно';
-                        return (
-                          <button
-                            key={option.selectionKey || option.key}
-                            type="button"
-                            className={`booking-position-option${isSelected ? ' is-selected' : ''}`}
-                            onClick={() => {
-                              setBookingSelectedPositionKey(option.selectionKey || option.key);
-                              setBookingError('');
-                            }}
-                          >
-                            <span className="booking-position-option-main">
-                              <span className="booking-position-option-label">{option.displayLabel || option.label}</span>
-                              <span className="booking-position-option-meta">{freeLabel}</span>
-                            </span>
-                            {isSelected ? <span className="booking-position-option-check">✓</span> : null}
-                          </button>
-                        );
-                      })}
+                    <div className="booking-position-groups">
+                      {bookingPositionGroups.team1.length ? (
+                        <div className="booking-position-team-block">
+                          <div className="booking-position-team-title">Команда 1</div>
+                          <div className="booking-position-list">
+                            {bookingPositionGroups.team1.map((option) => renderBookingPositionOption(option))}
+                          </div>
+                        </div>
+                      ) : null}
+
+                      {bookingPositionGroups.team2.length ? (
+                        <div className="booking-position-team-block">
+                          <div className="booking-position-team-title">Команда 2</div>
+                          <div className="booking-position-list">
+                            {bookingPositionGroups.team2.map((option) => renderBookingPositionOption(option))}
+                          </div>
+                        </div>
+                      ) : null}
+
+                      {bookingPositionGroups.other.length ? (
+                        <div className="booking-position-team-block">
+                          <div className="booking-position-team-title">Другие позиции</div>
+                          <div className="booking-position-list">
+                            {bookingPositionGroups.other.map((option) => renderBookingPositionOption(option))}
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
                   ) : (
                     <p className="hint" style={{ textAlign: 'left', marginTop: 0 }}>
@@ -1985,7 +2018,11 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
 
                   {selectedBookingPosition ? (
                     <p className="hint" style={{ textAlign: 'left' }}>
-                      Выбрано: {selectedBookingPosition.displayLabel || selectedBookingPosition.label}
+                      Выбрано:{' '}
+                      {buildPositionLabelWithTeam(
+                        getBookingPositionTitle(selectedBookingPosition),
+                        selectedBookingPosition?.teamLabel || '',
+                      ) || selectedBookingPosition.displayLabel || selectedBookingPosition.label}
                     </p>
                   ) : bookingPositionOptions.length ? (
                     <p className="hint" style={{ textAlign: 'left' }}>

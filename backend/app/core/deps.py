@@ -261,6 +261,18 @@ def _parse_int(value: str) -> int:
 # Current user helpers
 # -----------------------------
 def _get_or_create_user_by_telegram(db: Session, tg: TgWebAppUser) -> User:
+    def _try_sync_avatar(user: User) -> None:
+        current_avatar = str(getattr(user, "avatar_url", None) or "").strip()
+        if current_avatar:
+            return
+        try:
+            from app.services.telegram_bot_service import sync_telegram_avatar_for_user
+
+            sync_telegram_avatar_for_user(db, user)
+        except Exception:
+            # Avatar sync is best-effort and must not break auth flow.
+            pass
+
     try:
         user = db.execute(select(User).where(User.telegram_id == tg.telegram_id)).scalar_one_or_none()
         if user:
@@ -295,6 +307,7 @@ def _get_or_create_user_by_telegram(db: Session, tg: TgWebAppUser) -> User:
                 db.add(user)
                 db.commit()
                 db.refresh(user)
+            _try_sync_avatar(user)
             return user
 
         default_level_id = get_default_level_id(db)
@@ -313,6 +326,7 @@ def _get_or_create_user_by_telegram(db: Session, tg: TgWebAppUser) -> User:
         db.add(user)
         db.commit()
         db.refresh(user)
+        _try_sync_avatar(user)
         return user
 
     except IntegrityError:

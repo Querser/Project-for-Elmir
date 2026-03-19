@@ -159,13 +159,10 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
     location_name: '',
     image_url: '',
     image_urls_text: '',
-    video_url: '',
   });
 
   const [imageFiles, setImageFiles] = useState([]);
-  const [videoFile, setVideoFile] = useState(null);
   const [removeImage, setRemoveImage] = useState(false);
-  const [removeVideo, setRemoveVideo] = useState(false);
   const [locations, setLocations] = useState([]);
   const [selectedLocationId, setSelectedLocationId] = useState('');
   const [selectedLocationFallback, setSelectedLocationFallback] = useState('');
@@ -293,13 +290,6 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
       nextErrors.image_file = `Изображение слишком большое (максимум ${MAX_UPLOAD_MB} МБ)`;
     }
 
-    if (videoFile && !String(videoFile.type || '').startsWith('video/')) {
-      nextErrors.video_file = 'Загрузите видеофайл (video/*)';
-    }
-    if (videoFile && videoFile.size > MAX_UPLOAD_MB * 1024 * 1024) {
-      nextErrors.video_file = `Видео слишком большое (максимум ${MAX_UPLOAD_MB} МБ)`;
-    }
-
     if (!imageFiles.length && form.image_url && !MEDIA_URL_RE.test(String(form.image_url).trim())) {
       nextErrors.image_url = 'Некорректная ссылка на изображение';
     }
@@ -307,10 +297,6 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
     if (extraImageUrls.some((url) => !MEDIA_URL_RE.test(url))) {
       nextErrors.image_urls_text = 'Некорректная ссылка в дополнительных фото';
     }
-    if (!videoFile && form.video_url && !MEDIA_URL_RE.test(String(form.video_url).trim())) {
-      nextErrors.video_url = 'Некорректная ссылка на видео';
-    }
-
     return nextErrors;
   }
 
@@ -347,7 +333,6 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
         location_name: locationId ? '' : locationName,
         image_url: imageUrls[0] || '',
         image_urls_text: imageUrls.slice(1).join('\n'),
-        video_url: fromState.video_url || '',
       });
       setSelectedLocationId(locationId);
       setSelectedLocationFallback(locationId ? (locationName || `Локация #${locationId}`) : '');
@@ -378,7 +363,6 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
         location_name: locationId ? '' : locationName,
         image_url: imageUrls[0] || '',
         image_urls_text: imageUrls.slice(1).join('\n'),
-        video_url: data.video_url || '',
       });
       setSelectedLocationId(locationId);
       setSelectedLocationFallback(locationId ? (locationName || `Локация #${locationId}`) : '');
@@ -417,11 +401,9 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
     setBusy(true);
     try {
       let imageUrl = form.image_url || '';
-      let videoUrl = form.video_url || '';
       const additionalImageUrls = parseImageUrlsText(form.image_urls_text);
 
       if (removeImage) imageUrl = '';
-      if (removeVideo) videoUrl = '';
 
       if (imageFiles.length) {
         const uploadedImageUrls = [];
@@ -434,9 +416,6 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
         if (uploadedImageUrls.length > 1) {
           additionalImageUrls.unshift(...uploadedImageUrls.slice(1));
         }
-      }
-      if (videoFile) {
-        videoUrl = await uploadTrainingMedia(videoFile);
       }
       const imageUrls = normalizeMediaUrlList([imageUrl, ...additionalImageUrls]);
 
@@ -457,7 +436,6 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
         location_name: selectedLocationId ? null : (form.location_name.trim() || null),
         image_url: imageUrls[0] || null,
         image_urls: imageUrls.length ? imageUrls : null,
-        video_url: videoUrl || null,
       };
 
       if (isEdit) {
@@ -702,40 +680,6 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
                 onChange={(e) => setField('image_urls_text', e.target.value)}
                 placeholder={"/media/trainings/photo-2.jpg\nhttps://example.com/photo-3.jpg"}
               />
-            </Field>
-
-            <Field
-              label="Видео тренировки"
-              error={errors.video_file}
-              hint="Загрузите видео. Поддерживаются форматы video/*, до 50 МБ"
-            >
-              <>
-                <Input
-                  type="file"
-                  accept="video/*"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0] || null;
-                    setVideoFile(f);
-                    if (f) setRemoveVideo(false);
-                  }}
-                />
-                {videoFile ? <div className="field-hint">Выбран файл: {videoFile.name}</div> : null}
-                {!videoFile && form.video_url ? (
-                  <div className="field-hint">Текущее видео: <a href={form.video_url} target="_blank" rel="noreferrer">открыть</a></div>
-                ) : null}
-                {(videoFile || form.video_url) ? (
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => {
-                      setVideoFile(null);
-                      setRemoveVideo(true);
-                    }}
-                  >
-                    Убрать видео
-                  </Button>
-                ) : null}
-              </>
             </Field>
 
             <Field label="Описание" error={errors.description}>

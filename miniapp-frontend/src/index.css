@@ -57,6 +57,9 @@ button, input, select {
 /* Screens */
 .screen { padding: 16px 16px 20px; flex: 1; }
 .screen.active { display: block; }
+#screen-home.screen {
+  padding-top: 22px;
+}
 
 /* Topbar */
 .topbar {
@@ -570,6 +573,23 @@ button, input, select {
   flex-direction: column;
   gap: 10px;
 }
+.booking-position-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.booking-position-team-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.booking-position-team-title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
 .booking-position-list {
   display: flex;
   flex-direction: column;
@@ -676,6 +696,7 @@ button, input, select {
     overflow: hidden;
   }
   .screen { padding-top: 20px; }
+  #screen-home.screen { padding-top: 24px; }
   .hero-image { margin-top: -20px; }
   .tabbar { border-radius: 0 0 34px 34px; }
 }

@@ -448,7 +448,7 @@ def send_ban_notice_to_user(db: Session, *, user_id: int) -> bool:
     return send_bot_message_to_user(telegram_id=tg_id, text=text)
 
 
-def _save_avatar_if_possible(db: Session, user: User) -> None:
+def sync_telegram_avatar_for_user(db: Session, user: User) -> None:
     if not hasattr(user, "avatar_url"):
         return
     tg_id = int(getattr(user, "telegram_id", 0) or 0)
@@ -779,7 +779,7 @@ def handle_telegram_update(db: Session, update: dict[str, Any]) -> dict[str, Any
                 first_name=(user_obj.get("first_name") or "").strip() or None,
                 last_name=(user_obj.get("last_name") or "").strip() or None,
             )
-            _save_avatar_if_possible(db, user)
+            sync_telegram_avatar_for_user(db, user)
 
             if message.get("contact"):
                 _process_contact(db, message, user)
@@ -814,7 +814,7 @@ def handle_telegram_update(db: Session, update: dict[str, Any]) -> dict[str, Any
                     first_name=(callback_user.get("first_name") or "").strip() or None,
                     last_name=(callback_user.get("last_name") or "").strip() or None,
                 )
-                _save_avatar_if_possible(db, user)
+                sync_telegram_avatar_for_user(db, user)
 
                 if callback_data in {"/start", "start", "/menu", "menu"}:
                     _send_start_flow(db, user, is_new_user=is_new_user)
