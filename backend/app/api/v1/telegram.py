@@ -27,6 +27,15 @@ def _diag(message: str) -> None:
     print(f"[TELEGRAM_DIAG] {message}", flush=True)
 
 
+def _select_webhook_response_command(commands: list[dict[str, Any]]) -> dict[str, Any]:
+    # Telegram webhook response supports only one method.
+    # Prefer a command with interactive markup (e.g. contact button), else latest.
+    for command in reversed(commands):
+        if command.get("reply_markup") is not None:
+            return command
+    return commands[-1]
+
+
 class WebhookConfigIn(BaseModel):
     url: str | None = Field(default=None, max_length=1000)
     secret_token: str | None = Field(default=None, max_length=256)
@@ -67,10 +76,10 @@ def telegram_webhook(
         queued_commands = finish_telegram_webhook_response_mode(tokens)
 
     if queued_commands:
-        command = queued_commands[0]
+        command = _select_webhook_response_command(queued_commands)
         if len(queued_commands) > 1:
             log.warning(
-                "Telegram webhook queued %s response methods, returning only first method=%s",
+                "Telegram webhook queued %s response methods, returning selected method=%s",
                 len(queued_commands),
                 command.get("method"),
             )
