@@ -476,9 +476,12 @@ def enroll_user_to_training(
 
     amplua_slots: list[dict[str, Any]] = []
     amplua_by_key: dict[str, dict[str, Any]] = {}
+    selected_slot: dict[str, Any] | None = None
+    can_put_to_reserve = False
     if training_is_amplua:
         amplua_slots, amplua_by_key = _build_amplua_context(training, rows)
-        main_cap = sum(int(slot.get("capacity", 0) or 0) for slot in amplua_slots)
+        main_cap = sum(int(slot.get("capacity_main", slot.get("capacity", 0)) or 0) for slot in amplua_slots)
+        reserve_cap = sum(int(slot.get("capacity_reserve", 0) or 0) for slot in amplua_slots)
         can_put_to_reserve = bool(main_cap and active_cnt >= main_cap and reserve_cap and reserve_cnt < reserve_cap)
 
         if requested_position_key:
@@ -493,7 +496,8 @@ def enroll_user_to_training(
                         "position_slots": amplua_slots,
                     },
                 )
-            if not selected_slot.get("has_free_slots") and not can_put_to_reserve:
+            slot_can_reserve = bool(can_put_to_reserve and selected_slot.get("has_free_reserve_slots"))
+            if not selected_slot.get("has_free_slots") and not slot_can_reserve:
                 raise AppException.conflict(
                     ErrorCode.TRAINING_FULL,
                     f'На позиции "{selected_slot["label"]}" нет свободных мест',
@@ -524,6 +528,21 @@ def enroll_user_to_training(
     # main заполнен -> reserve
     if main_cap and active_cnt >= main_cap:
         if reserve_cap and reserve_cnt < reserve_cap:
+            if training_is_amplua and selected_slot is not None and not bool(selected_slot.get("has_free_reserve_slots")):
+                raise AppException.conflict(
+                    ErrorCode.TRAINING_FULL,
+                    f'На позиции "{selected_slot["label"]}" нет свободных мест в резерве',
+                    details={
+                        "training_id": training_id,
+                        "requested_position_key": requested_position_key,
+                        "requested_position_label": selected_slot["label"],
+                        "requested_team_key": selected_slot.get("team_key"),
+                        "requested_team_label": selected_slot.get("team_label"),
+                        "requested_position_name": selected_slot.get("position_label"),
+                        "available_positions": [slot for slot in amplua_slots if slot.get("has_free_slots")],
+                        "position_slots": amplua_slots,
+                    },
+                )
             status = RESERVE_STATUS()
             is_reserve_flag = True
         else:

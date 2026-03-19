@@ -58,7 +58,7 @@ button, input, select {
 .screen { padding: 16px 16px 20px; flex: 1; }
 .screen.active { display: block; }
 #screen-home.screen {
-  padding-top: 22px;
+  padding-top: 34px;
 }
 
 /* Topbar */
@@ -696,7 +696,7 @@ button, input, select {
     overflow: hidden;
   }
   .screen { padding-top: 20px; }
-  #screen-home.screen { padding-top: 24px; }
+  #screen-home.screen { padding-top: 32px; }
   .hero-image { margin-top: -20px; }
   .tabbar { border-radius: 0 0 34px 34px; }
 }

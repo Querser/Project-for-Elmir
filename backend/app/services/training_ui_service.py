@@ -289,9 +289,11 @@ def build_training_ui_payload(
             positions=getattr(training, "amplua_positions", None),
             enrollments=rows if EnrollmentModel is not None and training_id is not None else [],
         )
-        occupied_main = sum(int(slot.get("occupied", 0) or 0) for slot in amplua_position_slots)
-        capacity_main = sum(int(slot.get("capacity", 0) or 0) for slot in amplua_position_slots)
-        free_places = sum(int(slot.get("free", 0) or 0) for slot in amplua_position_slots)
+        occupied_main = sum(int(slot.get("occupied_main", slot.get("occupied", 0)) or 0) for slot in amplua_position_slots)
+        occupied_reserve = sum(int(slot.get("occupied_reserve", 0) or 0) for slot in amplua_position_slots)
+        capacity_main = sum(int(slot.get("capacity_main", slot.get("capacity", 0)) or 0) for slot in amplua_position_slots)
+        capacity_reserve = sum(int(slot.get("capacity_reserve", 0) or 0) for slot in amplua_position_slots)
+        free_places = sum(int(slot.get("free_main", slot.get("free", 0)) or 0) for slot in amplua_position_slots)
     else:
         free_places = max(capacity_main - occupied_main, 0)
 

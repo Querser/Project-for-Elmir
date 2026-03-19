@@ -28,7 +28,6 @@ _AMPLUA_TEAM_POSITIONS: tuple[dict[str, str], ...] = (
 
 _AMPLUA_MAIN_STATUSES = {"active", "enrolled", "confirmed"}
 _AMPLUA_RESERVED_STATUSES = {"reserve", "waitlist", "standby"}
-_AMPLUA_OCCUPIED_STATUSES = _AMPLUA_MAIN_STATUSES | _AMPLUA_RESERVED_STATUSES
 
 
 def _build_amplua_position_specs() -> tuple[dict[str, str], ...]:
@@ -51,7 +50,6 @@ def _build_amplua_position_specs() -> tuple[dict[str, str], ...]:
 
 AMPLUA_POSITION_SPECS = _build_amplua_position_specs()
 _AMPLUA_SPECS_BY_KEY: dict[str, dict[str, str]] = {spec["key"]: spec for spec in AMPLUA_POSITION_SPECS}
-_AMPLUA_DEFAULT_POSITIONS: dict[str, int] = {spec["key"]: 1 for spec in AMPLUA_POSITION_SPECS}
 _AMPLUA_LEGACY_KEY_ALIASES: dict[str, str] = {
     # Backward compatibility for old keys:
     # doigrovka/ЦБ were historically encoded as *_1/*_2 without explicit team,
@@ -76,6 +74,22 @@ _AMPLUA_LEGACY_KEY_ALIASES: dict[str, str] = {
     "team2_setter": "team_2_setter",
     "team2_opposite": "team_2_opposite",
     "team2_libero": "team_2_libero",
+}
+
+
+def _amplua_slots_per_team(position_key: str) -> int:
+    key = str(position_key or "").strip().lower()
+    # Fixed business rules:
+    # - доигровка/outside and ЦБ/middle: 1 slot per team
+    # - every other position: 2 slots per team
+    if key in {"outside", "middle"}:
+        return 1
+    return 2
+
+
+_AMPLUA_DEFAULT_POSITIONS: dict[str, int] = {
+    spec["key"]: _amplua_slots_per_team(spec["position_key"])
+    for spec in AMPLUA_POSITION_SPECS
 }
 
 
@@ -126,6 +140,11 @@ def normalize_amplua_positions(value: Any) -> dict[str, int]:
 def amplua_capacity_main(value: Any) -> int:
     positions = normalize_amplua_positions(value)
     return int(sum(max(0, int(v)) for v in positions.values()))
+
+
+def amplua_capacity_reserve(value: Any) -> int:
+    # Reserve capacity mirrors static main capacity for ampLua rules.
+    return amplua_capacity_main(value)
 
 
 def normalize_media_url(value: Any) -> str | None:
@@ -193,22 +212,28 @@ def build_amplua_position_snapshot(
     enrollments: Sequence[Any] | None = None,
 ) -> list[dict[str, Any]]:
     capacities = get_fixed_amplua_positions()
-    occupied: dict[str, int] = {spec["key"]: 0 for spec in AMPLUA_POSITION_SPECS}
+    occupied_main: dict[str, int] = {spec["key"]: 0 for spec in AMPLUA_POSITION_SPECS}
+    occupied_reserve: dict[str, int] = {spec["key"]: 0 for spec in AMPLUA_POSITION_SPECS}
 
     for enrollment in enrollments or []:
         status = str(getattr(getattr(enrollment, "status", None), "value", getattr(enrollment, "status", "")) or "").strip().lower()
-        if status not in _AMPLUA_OCCUPIED_STATUSES:
-            continue
         position_key = normalize_amplua_position_key(getattr(enrollment, "position_key", None))
-        if position_key in occupied:
-            occupied[position_key] += 1
+        if not position_key:
+            continue
+        if status in _AMPLUA_MAIN_STATUSES:
+            occupied_main[position_key] = occupied_main.get(position_key, 0) + 1
+        elif status in _AMPLUA_RESERVED_STATUSES:
+            occupied_reserve[position_key] = occupied_reserve.get(position_key, 0) + 1
 
     snapshot: list[dict[str, Any]] = []
     for spec in AMPLUA_POSITION_SPECS:
         key = spec["key"]
-        capacity = capacities.get(key, 0)
-        used = occupied.get(key, 0)
-        free = max(capacity - used, 0)
+        capacity_main = capacities.get(key, 0)
+        capacity_reserve = capacities.get(key, 0)
+        used_main = occupied_main.get(key, 0)
+        used_reserve = occupied_reserve.get(key, 0)
+        free_main = max(capacity_main - used_main, 0)
+        free_reserve = max(capacity_reserve - used_reserve, 0)
         snapshot.append(
             {
                 "key": key,
@@ -217,10 +242,18 @@ def build_amplua_position_snapshot(
                 "team_label": spec["team_label"],
                 "position_key": spec["position_key"],
                 "position_label": spec["position_label"],
-                "capacity": capacity,
-                "occupied": used,
-                "free": free,
-                "has_free_slots": free > 0,
+                "capacity": capacity_main,
+                "occupied": used_main,
+                "free": free_main,
+                "has_free_slots": free_main > 0,
+                "capacity_main": capacity_main,
+                "occupied_main": used_main,
+                "free_main": free_main,
+                "has_free_main_slots": free_main > 0,
+                "capacity_reserve": capacity_reserve,
+                "occupied_reserve": used_reserve,
+                "free_reserve": free_reserve,
+                "has_free_reserve_slots": free_reserve > 0,
             }
         )
     return snapshot
@@ -309,6 +342,11 @@ def create_training(db: Session, data: TrainingCreate) -> Training:
         if normalized_training_type == AMPLUA_TRAINING_TYPE
         else max(0, int(getattr(data, "capacity_main", 0) or 0))
     )
+    resolved_capacity_reserve = (
+        amplua_capacity_reserve(normalized_positions)
+        if normalized_training_type == AMPLUA_TRAINING_TYPE
+        else max(0, int(getattr(data, "capacity_reserve", 0) or 0))
+    )
     primary_image_url, image_gallery = merge_image_gallery(
         image_url=getattr(data, "image_url", None),
         image_urls=getattr(data, "image_urls", None),
@@ -323,7 +361,7 @@ def create_training(db: Session, data: TrainingCreate) -> Training:
         max_level_name=data.max_level_name,
         price=data.price,
         capacity_main=resolved_capacity_main,
-        capacity_reserve=data.capacity_reserve,
+        capacity_reserve=resolved_capacity_reserve,
         training_type=normalized_training_type,
         amplua_positions=normalized_positions or None,
         coach_name=data.coach_name,
@@ -364,6 +402,7 @@ def update_training(db: Session, training: Training, data: TrainingUpdate) -> Tr
         next_positions = get_fixed_amplua_positions()
         update_data['amplua_positions'] = next_positions
         update_data['capacity_main'] = amplua_capacity_main(next_positions)
+        update_data['capacity_reserve'] = amplua_capacity_reserve(next_positions)
     elif 'training_type' in update_data and next_training_type != AMPLUA_TRAINING_TYPE:
         update_data['amplua_positions'] = None
 

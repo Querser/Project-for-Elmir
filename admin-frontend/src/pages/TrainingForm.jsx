@@ -18,7 +18,19 @@ const TITLE_RE = /^[\p{L}\p{N}][\p{L}\p{N}\s.,:()"'!?+\-/]{1,99}$/u;
 const PERSON_NAME_RE = /^[\p{L}][\p{L}\s.'-]{1,99}$/u;
 const LOCATION_RE = /^[\p{L}\p{N}][\p{L}\p{N}\s.,:()"'!?+\-/]{1,119}$/u;
 const MEDIA_URL_RE = /^(https?:\/\/[^\s]+|\/media\/trainings\/[^\s]+)$/i;
-const AMPLUA_MAIN_CAPACITY_FIXED = 10;
+const AMPLUA_POSITION_KEYS = ['outside', 'middle', 'setter', 'opposite', 'libero'];
+
+function ampluaSlotsPerTeam(positionKey) {
+  const key = String(positionKey || '').trim().toLowerCase();
+  if (key === 'outside' || key === 'middle') return 1;
+  return 2;
+}
+
+const AMPLUA_MAIN_CAPACITY_FIXED = AMPLUA_POSITION_KEYS.reduce(
+  (sum, key) => sum + ampluaSlotsPerTeam(key) * 2,
+  0,
+);
+const AMPLUA_RESERVE_CAPACITY_FIXED = AMPLUA_MAIN_CAPACITY_FIXED;
 
 function isAmpluaTrainingType(value) {
   return String(value || '').trim().toLowerCase() === 'амплуа';
@@ -50,15 +62,6 @@ function normalizeMediaUrlList(value) {
     result.push(url);
   });
   return result;
-}
-
-function parseImageUrlsText(value) {
-  return normalizeMediaUrlList(
-    String(value || '')
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean),
-  );
 }
 
 function locationLabel(location) {
@@ -158,10 +161,10 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
     coach_name: '',
     location_name: '',
     image_url: '',
-    image_urls_text: '',
   });
 
   const [imageFiles, setImageFiles] = useState([]);
+  const [existingImageUrls, setExistingImageUrls] = useState([]);
   const [removeImage, setRemoveImage] = useState(false);
   const [locations, setLocations] = useState([]);
   const [selectedLocationId, setSelectedLocationId] = useState('');
@@ -171,6 +174,7 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
   const canSave = useMemo(() => !busy && !loading, [busy, loading]);
   const isAmplua = isAmpluaTrainingType(form.training_type);
   const ampluaMainCapacity = AMPLUA_MAIN_CAPACITY_FIXED;
+  const ampluaReserveCapacity = AMPLUA_RESERVE_CAPACITY_FIXED;
 
   function setField(name, value) {
     setForm((prev) => ({ ...prev, [name]: value }));
@@ -236,16 +240,18 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
       }
     }
 
-    const capReserveRaw = String(form.capacity_reserve ?? '').trim();
-    const capReserve = Number(capReserveRaw);
-    if (!capReserveRaw) {
-      nextErrors.capacity_reserve = 'Укажите вместимость резерва';
-    } else if (!Number.isFinite(capReserve) || !Number.isInteger(capReserve)) {
-      nextErrors.capacity_reserve = 'Вместимость резерва должна быть целым числом';
-    } else if (capReserve < 0) {
-      nextErrors.capacity_reserve = 'Вместимость резерва не может быть отрицательной';
-    } else if (capReserve > 1000) {
-      nextErrors.capacity_reserve = 'Слишком большая вместимость резерва (максимум 1000)';
+    if (!isAmplua) {
+      const capReserveRaw = String(form.capacity_reserve ?? '').trim();
+      const capReserve = Number(capReserveRaw);
+      if (!capReserveRaw) {
+        nextErrors.capacity_reserve = 'Укажите вместимость резерва';
+      } else if (!Number.isFinite(capReserve) || !Number.isInteger(capReserve)) {
+        nextErrors.capacity_reserve = 'Вместимость резерва должна быть целым числом';
+      } else if (capReserve < 0) {
+        nextErrors.capacity_reserve = 'Вместимость резерва не может быть отрицательной';
+      } else if (capReserve > 1000) {
+        nextErrors.capacity_reserve = 'Слишком большая вместимость резерва (максимум 1000)';
+      }
     }
 
     const minIndex = CANONICAL_LEVEL_NAMES.indexOf(form.min_level_name);
@@ -293,10 +299,6 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
     if (!imageFiles.length && form.image_url && !MEDIA_URL_RE.test(String(form.image_url).trim())) {
       nextErrors.image_url = 'Некорректная ссылка на изображение';
     }
-    const extraImageUrls = parseImageUrlsText(form.image_urls_text);
-    if (extraImageUrls.some((url) => !MEDIA_URL_RE.test(url))) {
-      nextErrors.image_urls_text = 'Некорректная ссылка в дополнительных фото';
-    }
     return nextErrors;
   }
 
@@ -332,8 +334,8 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
         coach_name: fromState.coach_name || '',
         location_name: locationId ? '' : locationName,
         image_url: imageUrls[0] || '',
-        image_urls_text: imageUrls.slice(1).join('\n'),
       });
+      setExistingImageUrls(imageUrls.slice(1));
       setSelectedLocationId(locationId);
       setSelectedLocationFallback(locationId ? (locationName || `Локация #${locationId}`) : '');
       setLoading(false);
@@ -362,8 +364,8 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
         coach_name: data.coach_name || '',
         location_name: locationId ? '' : locationName,
         image_url: imageUrls[0] || '',
-        image_urls_text: imageUrls.slice(1).join('\n'),
       });
+      setExistingImageUrls(imageUrls.slice(1));
       setSelectedLocationId(locationId);
       setSelectedLocationFallback(locationId ? (locationName || `Локация #${locationId}`) : '');
     } catch {
@@ -401,7 +403,7 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
     setBusy(true);
     try {
       let imageUrl = form.image_url || '';
-      const additionalImageUrls = parseImageUrlsText(form.image_urls_text);
+      const additionalImageUrls = removeImage ? [] : [...existingImageUrls];
 
       if (removeImage) imageUrl = '';
 
@@ -428,7 +430,9 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
         max_level_name: form.max_level_name || null,
         price: Math.max(0, normalizeNumber(form.price, 0)),
         capacity_main: isAmplua ? ampluaMainCapacity : Math.max(0, Math.round(normalizeNumber(form.capacity_main, 0))),
-        capacity_reserve: Math.max(0, Math.round(normalizeNumber(form.capacity_reserve, 0))),
+        capacity_reserve: isAmplua
+          ? ampluaReserveCapacity
+          : Math.max(0, Math.round(normalizeNumber(form.capacity_reserve, 0))),
         training_type: isAmplua ? 'амплуа' : null,
         amplua_positions: null,
         coach_name: form.coach_name || null,
@@ -552,12 +556,19 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
             )}
 
             <Field label="Вместимость (резерв)" error={errors.capacity_reserve}>
-              <Input
-                type="text"
-                inputMode="numeric"
-                value={form.capacity_reserve}
-                onChange={(e) => setField('capacity_reserve', e.target.value)}
-              />
+              {isAmplua ? (
+                <>
+                  <Input type="text" inputMode="numeric" value={ampluaReserveCapacity} disabled />
+                  <div className="field-hint">Фиксировано по правилам ampLua (автоматически на backend).</div>
+                </>
+              ) : (
+                <Input
+                  type="text"
+                  inputMode="numeric"
+                  value={form.capacity_reserve}
+                  onChange={(e) => setField('capacity_reserve', e.target.value)}
+                />
+              )}
             </Field>
 
             <Field label="Минимальный уровень" error={errors.min_level_name}>
@@ -661,25 +672,13 @@ export default function TrainingFormPage({ mode, trainingId, routeState }) {
                     onClick={() => {
                       setImageFiles([]);
                       setRemoveImage(true);
+                      setExistingImageUrls([]);
                     }}
                   >
                     Убрать фото
                   </Button>
                 ) : null}
               </>
-            </Field>
-
-            <Field
-              label="Дополнительные фото (URL, по одному в строке)"
-              error={errors.image_urls_text}
-              hint="Первое фото показывается как основное. Остальные попадут в галерею тренировки."
-            >
-              <Textarea
-                rows={4}
-                value={form.image_urls_text}
-                onChange={(e) => setField('image_urls_text', e.target.value)}
-                placeholder={"/media/trainings/photo-2.jpg\nhttps://example.com/photo-3.jpg"}
-              />
             </Field>
 
             <Field label="Описание" error={errors.description}>

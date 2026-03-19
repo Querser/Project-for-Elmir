@@ -456,7 +456,11 @@ function normalizePositionOption(entry, fallbackKey = '') {
       label: label || key,
       displayLabel: buildPositionLabelWithTeam(label || key, teamLabel),
       free: null,
+      freeMain: null,
+      freeReserve: null,
       total: null,
+      totalMain: null,
+      totalReserve: null,
       teamLabel: teamLabel || '',
       teamNumber,
       teamKey: teamKey || '',
@@ -499,6 +503,18 @@ function normalizePositionOption(entry, fallbackKey = '') {
     entry?.count ??
     entry?.qty ??
     null;
+  const freeMainRaw =
+    entry?.free_main ??
+    entry?.freeMain ??
+    entry?.main_free ??
+    entry?.mainFree ??
+    freeRaw;
+  const freeReserveRaw =
+    entry?.free_reserve ??
+    entry?.freeReserve ??
+    entry?.reserve_free ??
+    entry?.reserveFree ??
+    null;
   const totalRaw =
     entry?.total ??
     entry?.total_slots ??
@@ -506,6 +522,18 @@ function normalizePositionOption(entry, fallbackKey = '') {
     entry?.capacity ??
     entry?.max ??
     entry?.limit ??
+    null;
+  const totalMainRaw =
+    entry?.capacity_main ??
+    entry?.capacityMain ??
+    entry?.main_capacity ??
+    entry?.mainCapacity ??
+    totalRaw;
+  const totalReserveRaw =
+    entry?.capacity_reserve ??
+    entry?.capacityReserve ??
+    entry?.reserve_capacity ??
+    entry?.reserveCapacity ??
     null;
   const teamRaw =
     entry?.team ??
@@ -525,8 +553,10 @@ function normalizePositionOption(entry, fallbackKey = '') {
   if (!key) return null;
 
   const label = normalizePositionLabel(labelRaw || keyRaw || fallbackKey, key);
-  const free = normalizePositionCount(freeRaw);
-  const total = normalizePositionCount(totalRaw);
+  const freeMain = normalizePositionCount(freeMainRaw);
+  const freeReserve = normalizePositionCount(freeReserveRaw);
+  const totalMain = normalizePositionCount(totalMainRaw);
+  const totalReserve = normalizePositionCount(totalReserveRaw);
   const teamNumber = inferTeamNumberFromText(teamRaw) ?? inferTeamNumberFromPositionKey(key);
   const teamLabel = buildTeamLabel(teamRaw, teamNumber);
   const teamKey = normalizePositionKey(teamRaw || (teamNumber ? `team_${teamNumber}` : teamLabel));
@@ -538,8 +568,12 @@ function normalizePositionOption(entry, fallbackKey = '') {
     selectionKey,
     label: label || key,
     displayLabel: displayLabel || label || key,
-    free,
-    total,
+    free: freeMain,
+    freeMain,
+    freeReserve,
+    total: totalMain,
+    totalMain,
+    totalReserve,
     teamLabel: teamLabel || '',
     teamNumber,
     teamKey: teamKey || '',
@@ -1143,7 +1177,12 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
   const renderBookingPositionOption = (option) => {
     const optionSelectionKey = option.selectionKey || option.key;
     const isSelected = normalizePositionKey(optionSelectionKey) === normalizePositionKey(bookingSelectedPositionKey);
-    const freeLabel = option.free != null ? `свободно: ${option.free}` : 'свободно: доступно';
+    const freeMain = option?.freeMain ?? option?.free_main ?? option?.free;
+    const freeReserve = option?.freeReserve ?? option?.free_reserve;
+    let freeLabel = freeMain != null ? `основа: ${freeMain}` : 'основа: доступно';
+    if (freeReserve != null) {
+      freeLabel += ` · резерв: ${freeReserve}`;
+    }
     const optionTitle = getBookingPositionTitle(option);
 
     return (
