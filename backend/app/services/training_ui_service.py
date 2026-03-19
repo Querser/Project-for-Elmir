@@ -12,8 +12,8 @@ from app.services.ban_service import get_active_ban
 from app.services.training_service import (
     AMPLUA_TRAINING_TYPE,
     build_amplua_position_snapshot,
-    get_amplua_position_label,
-    is_amplua_training,
+    get_amplua_position_meta,
+    get_fixed_amplua_positions,
     normalize_training_type,
 )
 
@@ -179,10 +179,18 @@ def _participant_payload(enrollment: Any, *, is_reserve: bool) -> dict[str, Any]
 
     level_name = _safe_text(getattr(getattr(user_obj, "level", None), "name", None))
 
+    position_key = _safe_text(getattr(enrollment, "position_key", None)) or None
+    position_meta = get_amplua_position_meta(position_key) if position_key else None
+    canonical_position_key = (position_meta or {}).get("key") or position_key
+
     return {
         "enrollment_id": getattr(enrollment, "id", None),
         "user_id": user_id,
-        "position_key": _safe_text(getattr(enrollment, "position_key", None)) or None,
+        "position_key": canonical_position_key,
+        "position_slot_label": (position_meta or {}).get("label"),
+        "position_label": (position_meta or {}).get("position_label"),
+        "team_key": (position_meta or {}).get("team_key"),
+        "team_label": (position_meta or {}).get("team_label"),
         "first_name": first_name or None,
         "last_name": last_name or None,
         "username": username or None,
@@ -214,6 +222,9 @@ def build_training_ui_payload(
     user_enrollment_id: Optional[int] = None
     user_position_key: str | None = None
     user_position_label: str | None = None
+    user_position_name: str | None = None
+    user_position_team_key: str | None = None
+    user_position_team_label: str | None = None
     amplua_position_slots: list[dict[str, Any]] = []
     participants_main: list[dict[str, Any]] = []
     participants_reserve: list[dict[str, Any]] = []
@@ -258,8 +269,15 @@ def build_training_ui_payload(
                 user_queue_position = getattr(e, "queue_position", None)
                 position_key = _safe_text(getattr(e, "position_key", None))
                 if position_key:
-                    user_position_key = position_key
-                    user_position_label = get_amplua_position_label(position_key) or None
+                    position_meta = get_amplua_position_meta(position_key)
+                    if position_meta:
+                        user_position_key = position_meta.get("key")
+                        user_position_label = position_meta.get("label") or None
+                        user_position_name = position_meta.get("position_label") or None
+                        user_position_team_key = position_meta.get("team_key") or None
+                        user_position_team_label = position_meta.get("team_label") or None
+                    else:
+                        user_position_key = position_key
 
                 if is_cancelled:
                     user_enrollment_status = "cancelled"
@@ -346,6 +364,25 @@ def build_training_ui_payload(
         can_cancel = True
 
     late_cancel = is_late_cancel(training, cancel_hours=cancel_hours)
+    position_slots_payload = amplua_position_slots
+    available_positions = [slot for slot in position_slots_payload if slot.get("has_free_slots")]
+    if is_amplua and can_enroll_reserve and not available_positions:
+        # Для резерва ampLua разрешаем выбрать любую позицию, даже если в основе нет свободных слотов.
+        position_slots_payload = [
+            {
+                **slot,
+                "free": None,
+            }
+            for slot in amplua_position_slots
+        ]
+        available_positions = [
+            {
+                **slot,
+                "free": None,
+                "reserve_only": True,
+            }
+            for slot in position_slots_payload
+        ]
 
     payload = {
         "occupied_main": occupied_main,
@@ -369,11 +406,14 @@ def build_training_ui_payload(
         "final_price": float(pick.final_price),
         "picked_price_tier_id": pick.picked_tier_id,
         "training_type": training_type,
-        "amplua_positions": getattr(training, "amplua_positions", None) if is_amplua else None,
-        "position_slots": amplua_position_slots,
-        "available_positions": [slot for slot in amplua_position_slots if slot.get("has_free_slots")],
+        "amplua_positions": get_fixed_amplua_positions() if is_amplua else None,
+        "position_slots": position_slots_payload,
+        "available_positions": available_positions,
         "user_position_key": user_position_key,
         "user_position_label": user_position_label,
+        "user_position_name": user_position_name,
+        "user_position_team_key": user_position_team_key,
+        "user_position_team_label": user_position_team_label,
         "cancel_deadline_at": deadline.isoformat().replace("+00:00", "Z") if deadline else None,
         "is_late_cancel": late_cancel,
         "can_cancel": can_cancel,

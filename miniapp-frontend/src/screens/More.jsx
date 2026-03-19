@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { apiFetch } from '../api';
 import RefreshButton from '../components/RefreshButton';
+import { resolveMediaUrl } from '../utils/media';
 
 const DEFAULT_PUBLIC_TEXTS = {
   contacts_text: 'Контакты пока не заполнены.',
@@ -19,18 +20,6 @@ function formatName(profile) {
 function normalizeText(value) {
   if (value == null) return '';
   return String(value).trim();
-}
-
-function resolveAvatarUrl(raw) {
-  const value = normalizeText(raw);
-  if (!value) return '';
-  if (/^https?:\/\//i.test(value)) return value;
-
-  try {
-    return new URL(value, window.location.origin).toString();
-  } catch {
-    return value;
-  }
 }
 
 function openExternal(url) {
@@ -101,6 +90,7 @@ export default function More({ darkMode, onToggleDarkMode, onOpenProfile }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [page, setPage] = useState(null); // 'promotions' | 'rules' | 'contacts'
+  const [avatarFailed, setAvatarFailed] = useState(false);
 
   const isThemeControlled = typeof darkMode === 'boolean' && typeof onToggleDarkMode === 'function';
   const [darkLocal, setDarkLocal] = useState(() => localStorage.getItem('theme') === 'dark');
@@ -158,7 +148,11 @@ export default function More({ darkMode, onToggleDarkMode, onOpenProfile }) {
     return `Кубки: ${cups} · Место: ${pos}/${total}`;
   }, [rating]);
 
-  const avatarUrl = useMemo(() => resolveAvatarUrl(profile?.avatar_url), [profile]);
+  const avatarUrl = useMemo(() => resolveMediaUrl(profile?.avatar_url), [profile]);
+
+  useEffect(() => {
+    setAvatarFailed(false);
+  }, [avatarUrl]);
 
   const toggleTheme = (checked) => {
     if (isThemeControlled) {
@@ -203,11 +197,16 @@ export default function More({ darkMode, onToggleDarkMode, onOpenProfile }) {
         {!loading && !error ? (
           <>
             <div className="profile-card" role="button" tabIndex={0} onClick={() => onOpenProfile?.()}>
-              <div
-                className="profile-avatar"
-                style={avatarUrl ? { backgroundImage: `url(${avatarUrl})` } : undefined}
-              >
-                {!avatarUrl ? (name?.slice(0, 1)?.toUpperCase() || 'U') : null}
+              <div className="profile-avatar">
+                {avatarUrl && !avatarFailed ? (
+                  <img
+                    src={avatarUrl}
+                    alt={name || 'Аватар'}
+                    className="profile-avatar-image"
+                    onError={() => setAvatarFailed(true)}
+                    loading="lazy"
+                  />
+                ) : (name?.slice(0, 1)?.toUpperCase() || 'U')}
               </div>
               <div>
                 <h2 className="profile-name">{name}</h2>

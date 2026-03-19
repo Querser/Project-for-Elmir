@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { apiFetch } from '../api';
+import { resolveMediaUrl as resolveAssetUrl } from '../utils/media';
 
 /**
  * РРЅРѕРіРґР° Р±РµРє РѕС‚РґР°РµС‚ UTF-8 Р±Р°Р№С‚С‹, РЅРѕ РѕРЅРё СѓР¶Рµ РїСЂРµРІСЂР°С‰РµРЅС‹ РІ СЃС‚СЂРѕРєСѓ РєР°Рє Latin-1,
@@ -144,7 +145,7 @@ function participantDisplayName(item) {
   return 'Игрок';
 }
 
-function participantMeta(item) {
+function participantMeta(item, { isAmpLua = false } = {}) {
   const parts = [];
   const rawUsername = maybeFixUtf8Mojibake(item?.username ?? '').toString().trim();
   if (rawUsername) {
@@ -153,6 +154,15 @@ function participantMeta(item) {
 
   const levelName = maybeFixUtf8Mojibake(item?.level_name ?? '').toString().trim();
   if (levelName) parts.push(levelName);
+
+  if (isAmpLua) {
+    const positionLabel = positionDisplayLabelFromKey(
+      item?.position_key ?? item?.positionKey ?? '',
+      item?.position_label ?? item?.positionLabel ?? item?.position_name ?? item?.positionName ?? '',
+      item?.team ?? item?.team_name ?? item?.teamName ?? item?.team_id ?? item?.teamId ?? '',
+    );
+    if (positionLabel) parts.push(`Позиция: ${positionLabel}`);
+  }
 
   return parts.join(' • ');
 }
@@ -165,12 +175,7 @@ function participantAvatarLetter(item) {
 function resolveMediaUrl(raw) {
   const value = maybeFixUtf8Mojibake(raw ?? '').toString().trim();
   if (!value) return '';
-  if (/^https?:\/\//i.test(value)) return value;
-  try {
-    return new URL(value, window.location.origin).toString();
-  } catch {
-    return value;
-  }
+  return resolveAssetUrl(value);
 }
 
 function isVideoKind(value) {
@@ -337,10 +342,16 @@ function normalizePositionLabel(value, fallbackKey = '') {
     doigrovka: 'доигровка',
     outside_hitter: 'доигровка',
     wing_spiker: 'доигровка',
+    outside: 'доигровка',
+    outside_1: 'доигровка',
+    outside_2: 'доигровка',
     'цб': 'ЦБ',
     middle_blocker: 'ЦБ',
     cb: 'ЦБ',
     center_blocker: 'ЦБ',
+    middle: 'ЦБ',
+    middle_1: 'ЦБ',
+    middle_2: 'ЦБ',
     'связка': 'связка',
     setter: 'связка',
     setter_spiker: 'связка',
@@ -356,6 +367,74 @@ function normalizePositionLabel(value, fallbackKey = '') {
   return fallbackKey || '';
 }
 
+function inferTeamNumberFromText(value) {
+  const text = maybeFixUtf8Mojibake(value ?? '').toString().trim().toLowerCase();
+  if (!text) return null;
+
+  const compact = text.replace(/[\s_-]+/g, '');
+  if (compact === '1' || compact === 'team1' || compact === 'команда1' || compact === 't1') return 1;
+  if (compact === '2' || compact === 'team2' || compact === 'команда2' || compact === 't2') return 2;
+
+  if (text === '1' || text === 'team1' || text === 'команда1' || text === 'команда 1') return 1;
+  if (text === '2' || text === 'team2' || text === 'команда2' || text === 'команда 2') return 2;
+
+  const teamMatch = text.match(/(?:team|команда)[_\-\s]*([12])/i);
+  if (teamMatch) return Number(teamMatch[1]);
+
+  const plainNumber = text.match(/^([12])$/);
+  if (plainNumber) return Number(plainNumber[1]);
+
+  return null;
+}
+
+function inferTeamNumberFromPositionKey(positionKey) {
+  const key = normalizePositionKey(positionKey);
+  if (!key) return null;
+
+  const embedded = key.match(/team(?:_|-)?([12])/);
+  if (embedded) return Number(embedded[1]);
+
+  const suffix = key.match(/(?:_|-)([12])$/);
+  if (suffix) return Number(suffix[1]);
+
+  return null;
+}
+
+function buildTeamLabel(teamRaw, teamNumber) {
+  const raw = maybeFixUtf8Mojibake(teamRaw ?? '').toString().trim();
+  if (raw) {
+    const numeric = inferTeamNumberFromText(raw);
+    if (numeric) return `Команда ${numeric}`;
+    if (/команда/i.test(raw)) return raw;
+    return `Команда ${raw}`;
+  }
+  if (teamNumber) return `Команда ${teamNumber}`;
+  return '';
+}
+
+function buildPositionLabelWithTeam(positionLabel, teamLabel) {
+  const base = maybeFixUtf8Mojibake(positionLabel ?? '').toString().trim();
+  if (!base) return '';
+  if (!teamLabel) return base;
+  if (base.toLowerCase().includes(teamLabel.toLowerCase())) return base;
+  return `${base} — ${teamLabel}`;
+}
+
+function getPositionOptionDedupKey(item) {
+  if (!item?.key) return '';
+  const teamPart = normalizePositionKey(item?.teamKey ?? item?.teamLabel ?? item?.teamNumber ?? '');
+  return teamPart ? `${item.key}::${teamPart}` : item.key;
+}
+
+function positionDisplayLabelFromKey(positionKey, rawLabel = '', teamRaw = '') {
+  const key = normalizePositionKey(positionKey);
+  if (!key) return '';
+  const label = normalizePositionLabel(rawLabel || key, key);
+  const teamNumber = inferTeamNumberFromText(teamRaw) ?? inferTeamNumberFromPositionKey(key);
+  const teamLabel = buildTeamLabel(teamRaw, teamNumber);
+  return buildPositionLabelWithTeam(label, teamLabel);
+}
+
 function normalizePositionCount(value) {
   const n = toNumber(value);
   return Number.isFinite(n) ? Math.max(0, Math.trunc(n)) : null;
@@ -367,7 +446,21 @@ function normalizePositionOption(entry, fallbackKey = '') {
   if (typeof entry === 'string' || typeof entry === 'number') {
     const label = normalizePositionLabel(entry, fallbackKey);
     const key = normalizePositionKey(entry || fallbackKey || label);
-    return key ? { key, label: label || key, free: null, total: null } : null;
+    if (!key) return null;
+    const teamNumber = inferTeamNumberFromPositionKey(key);
+    const teamLabel = buildTeamLabel('', teamNumber);
+    const teamKey = normalizePositionKey(teamLabel || (teamNumber ? `team_${teamNumber}` : ''));
+    return {
+      key,
+      selectionKey: teamKey ? `${key}::${teamKey}` : key,
+      label: label || key,
+      displayLabel: buildPositionLabelWithTeam(label || key, teamLabel),
+      free: null,
+      total: null,
+      teamLabel: teamLabel || '',
+      teamNumber,
+      teamKey: teamKey || '',
+    };
   }
 
   if (typeof entry !== 'object') return null;
@@ -414,6 +507,19 @@ function normalizePositionOption(entry, fallbackKey = '') {
     entry?.max ??
     entry?.limit ??
     null;
+  const teamRaw =
+    entry?.team ??
+    entry?.team_id ??
+    entry?.teamId ??
+    entry?.team_key ??
+    entry?.teamKey ??
+    entry?.team_name ??
+    entry?.teamName ??
+    entry?.side ??
+    entry?.side_name ??
+    entry?.sideName ??
+    entry?.group ??
+    '';
 
   const key = normalizePositionKey(keyRaw || labelRaw || fallbackKey);
   if (!key) return null;
@@ -421,12 +527,22 @@ function normalizePositionOption(entry, fallbackKey = '') {
   const label = normalizePositionLabel(labelRaw || keyRaw || fallbackKey, key);
   const free = normalizePositionCount(freeRaw);
   const total = normalizePositionCount(totalRaw);
+  const teamNumber = inferTeamNumberFromText(teamRaw) ?? inferTeamNumberFromPositionKey(key);
+  const teamLabel = buildTeamLabel(teamRaw, teamNumber);
+  const teamKey = normalizePositionKey(teamRaw || (teamNumber ? `team_${teamNumber}` : teamLabel));
+  const selectionKey = teamKey ? `${key}::${teamKey}` : key;
+  const displayLabel = buildPositionLabelWithTeam(label || key, teamLabel);
 
   return {
     key,
+    selectionKey,
     label: label || key,
+    displayLabel: displayLabel || label || key,
     free,
     total,
+    teamLabel: teamLabel || '',
+    teamNumber,
+    teamKey: teamKey || '',
   };
 }
 
@@ -465,19 +581,22 @@ function extractPositionOptionsFromSource(source) {
 
   const dedup = new Map();
   items.forEach((item) => {
-    const prev = dedup.get(item.key);
+    const dedupKey = getPositionOptionDedupKey(item);
+    const prev = dedup.get(dedupKey);
     if (!prev) {
-      dedup.set(item.key, item);
+      dedup.set(dedupKey, item);
       return;
     }
 
     const betterFree = prev.free != null ? prev.free : item.free;
     const betterTotal = prev.total ?? item.total ?? null;
     const betterLabel = prev.label || item.label || item.key;
-    dedup.set(item.key, {
+    dedup.set(dedupKey, {
       ...prev,
       ...item,
       label: betterLabel,
+      selectionKey: item.selectionKey || prev.selectionKey || dedupKey,
+      displayLabel: item.displayLabel || prev.displayLabel || betterLabel,
       free: betterFree,
       total: betterTotal,
     });
@@ -491,6 +610,10 @@ function extractPositionOptionsFromSource(source) {
     .map((item) => ({
       ...item,
       label: normalizePositionLabel(item.label, item.key) || item.key,
+      displayLabel:
+        item.displayLabel ||
+        buildPositionLabelWithTeam(normalizePositionLabel(item.label, item.key) || item.key, item.teamLabel),
+      selectionKey: item.selectionKey || getPositionOptionDedupKey(item) || item.key,
     }));
 }
 
@@ -500,16 +623,19 @@ function mergePositionOptionLists(lists) {
   lists.filter(Boolean).forEach((list) => {
     list.forEach((item) => {
       if (!item?.key) return;
-      const prev = dedup.get(item.key);
+      const dedupKey = getPositionOptionDedupKey(item);
+      const prev = dedup.get(dedupKey);
       if (!prev) {
-        dedup.set(item.key, item);
+        dedup.set(dedupKey, item);
         return;
       }
 
-      dedup.set(item.key, {
+      dedup.set(dedupKey, {
         ...prev,
         ...item,
         label: item.label || prev.label || item.key,
+        selectionKey: item.selectionKey || prev.selectionKey || dedupKey,
+        displayLabel: item.displayLabel || prev.displayLabel || item.label || prev.label || item.key,
         free: prev.free != null ? prev.free : item.free,
         total: prev.total != null ? prev.total : item.total,
       });
@@ -524,6 +650,10 @@ function mergePositionOptionLists(lists) {
     .map((item) => ({
       ...item,
       label: normalizePositionLabel(item.label, item.key) || item.key,
+      displayLabel:
+        item.displayLabel ||
+        buildPositionLabelWithTeam(normalizePositionLabel(item.label, item.key) || item.key, item.teamLabel),
+      selectionKey: item.selectionKey || getPositionOptionDedupKey(item) || item.key,
     }));
 }
 
@@ -598,12 +728,22 @@ function getPositionErrorMessage(payload) {
 function resolveAvatarUrl(raw) {
   const value = maybeFixUtf8Mojibake(raw ?? '').toString().trim();
   if (!value) return '';
-  if (/^https?:\/\//i.test(value)) return value;
-  try {
-    return new URL(value, window.location.origin).toString();
-  } catch {
-    return value;
-  }
+  return resolveAssetUrl(value);
+}
+
+function AvatarImage({ src, alt, className, fallback }) {
+  const [failedSrc, setFailedSrc] = useState('');
+  if (!src || failedSrc === src) return fallback;
+
+  return (
+    <img
+      src={src}
+      alt={alt}
+      className={className}
+      loading="lazy"
+      onError={() => setFailedSrc(src)}
+    />
+  );
 }
 
 function tgUsernamePretty(raw) {
@@ -867,10 +1007,18 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
     setBookingError('');
     setBookingPositionOptions(ampLuaTrainingPositionOptions);
     setBookingSelectedPositionKey((prev) => {
-      const preferred = normalizePositionKey(training?.user_position_key ?? '');
-      if (preferred && ampLuaTrainingPositionOptions.some((item) => item.key === preferred)) return preferred;
-      if (prev && ampLuaTrainingPositionOptions.some((item) => item.key === prev)) return prev;
-      return ampLuaTrainingPositionOptions[0]?.key ?? '';
+      const prevSelection = normalizePositionKey(prev);
+      if (prevSelection && ampLuaTrainingPositionOptions.some((item) => item.selectionKey === prevSelection)) {
+        return prevSelection;
+      }
+
+      const preferredKey = normalizePositionKey(training?.user_position_key ?? '');
+      if (preferredKey) {
+        const preferredOption = ampLuaTrainingPositionOptions.find((item) => item.key === preferredKey);
+        if (preferredOption?.selectionKey) return preferredOption.selectionKey;
+      }
+
+      return '';
     });
   }, [ampLuaTrainingPositionOptions, bookingOpen, isAmpLuaTraining, training?.user_position_key]);
 
@@ -953,7 +1101,10 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
   }, [playerModalProfile]);
 
   const selectedBookingPosition = useMemo(
-    () => bookingPositionOptions.find((item) => item.key === normalizePositionKey(bookingSelectedPositionKey)) ?? null,
+    () =>
+      bookingPositionOptions.find(
+        (item) => item.selectionKey === normalizePositionKey(bookingSelectedPositionKey),
+      ) ?? null,
     [bookingPositionOptions, bookingSelectedPositionKey],
   );
 
@@ -1295,7 +1446,10 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
       if (tierId != null) payload.price_tier_id = tierId;
 
       if (isAmpLuaTraining) {
-        const selectedPositionKey = normalizePositionKey(bookingSelectedPositionKey);
+        const selectedPositionKey =
+          normalizePositionKey(selectedBookingPosition?.key) ||
+          normalizePositionKey(bookingSelectedPositionKey).split('::')[0] ||
+          '';
         if (!selectedPositionKey) {
           setBookingError('Выберите позицию для записи.');
           return;
@@ -1334,10 +1488,18 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
       if (availableFromError.length) {
         setBookingPositionOptions(availableFromError);
         setBookingSelectedPositionKey((prev) => {
-          if (prev && availableFromError.some((item) => item.key === prev)) return prev;
+          const prevSelection = normalizePositionKey(prev);
+          if (prevSelection && availableFromError.some((item) => item.selectionKey === prevSelection)) {
+            return prevSelection;
+          }
+
           const preferred = normalizePositionKey(training?.user_position_key ?? '');
-          if (preferred && availableFromError.some((item) => item.key === preferred)) return preferred;
-          return availableFromError[0]?.key ?? '';
+          if (preferred) {
+            const preferredOption = availableFromError.find((item) => item.key === preferred);
+            if (preferredOption?.selectionKey) return preferredOption.selectionKey;
+          }
+
+          return '';
         });
       }
 
@@ -1648,32 +1810,32 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
                 <div className="participants-list-title">Основа ({participantsMain.length})</div>
                 {participantsMain.length ? (
                   <ul className="participants-list">
-                    {participantsMain.map((p, idx) => (
-                      <li key={`m-${p?.enrollment_id ?? p?.user_id ?? idx}`} className="participants-item">
-                        <button
-                          type="button"
-                          className={`participants-item-btn ${p?.user_id ? 'clickable' : ''}`}
-                          onClick={() => openParticipantProfile(p?.user_id)}
-                          disabled={!p?.user_id}
-                        >
-                          <span className="participants-avatar">
-                            {resolveAvatarUrl(p?.avatar_url) ? (
-                              <img
+                    {participantsMain.map((p, idx) => {
+                      const meta = participantMeta(p, { isAmpLua: isAmpLuaTraining });
+                      return (
+                        <li key={`m-${p?.enrollment_id ?? p?.user_id ?? idx}`} className="participants-item">
+                          <button
+                            type="button"
+                            className={`participants-item-btn ${p?.user_id ? 'clickable' : ''}`}
+                            onClick={() => openParticipantProfile(p?.user_id)}
+                            disabled={!p?.user_id}
+                          >
+                            <span className="participants-avatar">
+                              <AvatarImage
                                 src={resolveAvatarUrl(p?.avatar_url)}
                                 alt={participantDisplayName(p)}
                                 className="participants-avatar-image"
+                                fallback={participantAvatarLetter(p)}
                               />
-                            ) : (
-                              participantAvatarLetter(p)
-                            )}
-                          </span>
-                          <span className="participants-user">
-                            <span className="participants-name">{participantDisplayName(p)}</span>
-                            {participantMeta(p) ? <span className="participants-meta">{participantMeta(p)}</span> : null}
-                          </span>
-                        </button>
-                      </li>
-                    ))}
+                            </span>
+                            <span className="participants-user">
+                              <span className="participants-name">{participantDisplayName(p)}</span>
+                              {meta ? <span className="participants-meta">{meta}</span> : null}
+                            </span>
+                          </button>
+                        </li>
+                      );
+                    })}
                   </ul>
                 ) : (
                   <div className="participants-empty">Пока никто не записан в основу</div>
@@ -1684,32 +1846,32 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
                 <div className="participants-list-title">Резерв ({participantsReserve.length})</div>
                 {participantsReserve.length ? (
                   <ul className="participants-list">
-                    {participantsReserve.map((p, idx) => (
-                      <li key={`r-${p?.enrollment_id ?? p?.user_id ?? idx}`} className="participants-item">
-                        <button
-                          type="button"
-                          className={`participants-item-btn ${p?.user_id ? 'clickable' : ''}`}
-                          onClick={() => openParticipantProfile(p?.user_id)}
-                          disabled={!p?.user_id}
-                        >
-                          <span className="participants-avatar">
-                            {resolveAvatarUrl(p?.avatar_url) ? (
-                              <img
+                    {participantsReserve.map((p, idx) => {
+                      const meta = participantMeta(p, { isAmpLua: isAmpLuaTraining });
+                      return (
+                        <li key={`r-${p?.enrollment_id ?? p?.user_id ?? idx}`} className="participants-item">
+                          <button
+                            type="button"
+                            className={`participants-item-btn ${p?.user_id ? 'clickable' : ''}`}
+                            onClick={() => openParticipantProfile(p?.user_id)}
+                            disabled={!p?.user_id}
+                          >
+                            <span className="participants-avatar">
+                              <AvatarImage
                                 src={resolveAvatarUrl(p?.avatar_url)}
                                 alt={participantDisplayName(p)}
                                 className="participants-avatar-image"
+                                fallback={participantAvatarLetter(p)}
                               />
-                            ) : (
-                              participantAvatarLetter(p)
-                            )}
-                          </span>
-                          <span className="participants-user">
-                            <span className="participants-name">{participantDisplayName(p)}</span>
-                            {participantMeta(p) ? <span className="participants-meta">{participantMeta(p)}</span> : null}
-                          </span>
-                        </button>
-                      </li>
-                    ))}
+                            </span>
+                            <span className="participants-user">
+                              <span className="participants-name">{participantDisplayName(p)}</span>
+                              {meta ? <span className="participants-meta">{meta}</span> : null}
+                            </span>
+                          </button>
+                        </li>
+                      );
+                    })}
                   </ul>
                 ) : (
                   <div className="participants-empty">В резерве пока никого</div>
@@ -1794,20 +1956,20 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
                   {bookingPositionOptions.length ? (
                     <div className="booking-position-list">
                       {bookingPositionOptions.map((option) => {
-                        const isSelected = option.key === normalizePositionKey(bookingSelectedPositionKey);
+                        const isSelected = option.selectionKey === normalizePositionKey(bookingSelectedPositionKey);
                         const freeLabel = option.free != null ? `свободно: ${option.free}` : 'свободно: доступно';
                         return (
                           <button
-                            key={option.key}
+                            key={option.selectionKey || option.key}
                             type="button"
                             className={`booking-position-option${isSelected ? ' is-selected' : ''}`}
                             onClick={() => {
-                              setBookingSelectedPositionKey(option.key);
+                              setBookingSelectedPositionKey(option.selectionKey || option.key);
                               setBookingError('');
                             }}
                           >
                             <span className="booking-position-option-main">
-                              <span className="booking-position-option-label">{option.label}</span>
+                              <span className="booking-position-option-label">{option.displayLabel || option.label}</span>
                               <span className="booking-position-option-meta">{freeLabel}</span>
                             </span>
                             {isSelected ? <span className="booking-position-option-check">✓</span> : null}
@@ -1823,7 +1985,11 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
 
                   {selectedBookingPosition ? (
                     <p className="hint" style={{ textAlign: 'left' }}>
-                      Выбрано: {selectedBookingPosition.label}
+                      Выбрано: {selectedBookingPosition.displayLabel || selectedBookingPosition.label}
+                    </p>
+                  ) : bookingPositionOptions.length ? (
+                    <p className="hint" style={{ textAlign: 'left' }}>
+                      Выберите позицию и команду для продолжения.
                     </p>
                   ) : null}
                 </div>
@@ -1838,7 +2004,7 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
                 className="primary-btn"
                 type="button"
                 onClick={doEnroll}
-                disabled={saving || (isAmpLuaTraining && !bookingPositionOptions.length)}
+                disabled={saving || (isAmpLuaTraining && (!bookingPositionOptions.length || !selectedBookingPosition))}
               >
                 {'Перейти к оплате'}
               </button>
@@ -1890,15 +2056,12 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
               <>
                 <div className="profile-card" style={{ marginTop: 12, cursor: 'default' }}>
                   <div className="profile-avatar">
-                    {playerModalView.avatarUrl ? (
-                      <img
-                        src={playerModalView.avatarUrl}
-                        alt={playerModalView.name}
-                        className="profile-avatar-image"
-                      />
-                    ) : (
-                      playerModalView.avatarLetter
-                    )}
+                    <AvatarImage
+                      src={playerModalView.avatarUrl}
+                      alt={playerModalView.name}
+                      className="profile-avatar-image"
+                      fallback={playerModalView.avatarLetter}
+                    />
                   </div>
 
                   <div className="profile-main">

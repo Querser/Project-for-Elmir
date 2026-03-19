@@ -78,6 +78,23 @@ function updateViewportHeightVar() {
   document.documentElement.style.setProperty('--app-height', `${Math.round(viewportHeight)}px`);
 }
 
+function updateSafeTopVar(tg) {
+  if (typeof document === 'undefined') return;
+
+  const tgTopInsetCandidates = [
+    tg?.safeAreaInset?.top,
+    tg?.contentSafeAreaInset?.top,
+    tg?.viewportSafeAreaInset?.top,
+  ];
+  const tgTopInset = tgTopInsetCandidates
+    .map((value) => Number(value))
+    .find((value) => Number.isFinite(value) && value >= 0);
+
+  if (tgTopInset != null) {
+    document.documentElement.style.setProperty('--safe-top-inset', `${Math.round(tgTopInset)}px`);
+  }
+}
+
 export default function App() {
   const tg = useMemo(() => {
     return typeof window !== 'undefined' ? window.Telegram?.WebApp : null;
@@ -155,8 +172,12 @@ export default function App() {
 
   useEffect(() => {
     updateViewportHeightVar();
+    updateSafeTopVar(tg);
 
-    const onResize = () => updateViewportHeightVar();
+    const onResize = () => {
+      updateViewportHeightVar();
+      updateSafeTopVar(tg);
+    };
     window.addEventListener('resize', onResize, { passive: true });
     window.addEventListener('orientationchange', onResize, { passive: true });
     window.visualViewport?.addEventListener?.('resize', onResize, { passive: true });
@@ -168,7 +189,7 @@ export default function App() {
       window.visualViewport?.removeEventListener?.('resize', onResize);
       window.visualViewport?.removeEventListener?.('scroll', onResize);
     };
-  }, []);
+  }, [tg]);
 
   useEffect(() => {
     const hasOverlay = Boolean(overlay.type);

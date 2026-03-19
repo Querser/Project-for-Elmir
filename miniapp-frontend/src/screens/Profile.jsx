@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiFetch, extractItems } from '../api';
 import RefreshButton from '../components/RefreshButton';
+import { resolveMediaUrl } from '../utils/media';
 
 function normalizeStr(v) {
   if (v === null || v === undefined) return '';
@@ -53,18 +54,6 @@ function normalizePhone(raw) {
   return normalizeStr(raw);
 }
 
-function resolveAvatarUrl(raw) {
-  const value = normalizeStr(raw);
-  if (!value) return '';
-  if (/^https?:\/\//i.test(value)) return value;
-
-  try {
-    return new URL(value, window.location.origin).toString();
-  } catch {
-    return value;
-  }
-}
-
 export default function Profile({ onBack }) {
   const [loading, setLoading] = useState(true);
   const [errorText, setErrorText] = useState('');
@@ -76,6 +65,7 @@ export default function Profile({ onBack }) {
   const [editOpen, setEditOpen] = useState(false);
   const [tgSaving, setTgSaving] = useState(false);
   const [avatarSaving, setAvatarSaving] = useState(false);
+  const [avatarFailed, setAvatarFailed] = useState(false);
 
   const avatarInputRef = useRef(null);
 
@@ -135,8 +125,12 @@ export default function Profile({ onBack }) {
 
   const name = useMemo(() => (profile ? pickName(profile) : ''), [profile]);
 
-  const avatarUrl = useMemo(() => resolveAvatarUrl(profile?.avatar_url), [profile]);
+  const avatarUrl = useMemo(() => resolveMediaUrl(profile?.avatar_url), [profile]);
   const avatarFallbackLetter = useMemo(() => (name ? name[0].toUpperCase() : 'U'), [name]);
+
+  useEffect(() => {
+    setAvatarFailed(false);
+  }, [avatarUrl]);
 
   const levelName = useMemo(() => {
     if (!profile) return '—';
@@ -309,8 +303,14 @@ export default function Profile({ onBack }) {
             <div className="profile-top">
               <div className="profile-avatar-stack">
                 <div className="avatar-lg">
-                  {avatarUrl ? (
-                    <img src={avatarUrl} alt="Аватар профиля" className="avatar-lg-image" />
+                  {avatarUrl && !avatarFailed ? (
+                    <img
+                      src={avatarUrl}
+                      alt="Аватар профиля"
+                      className="avatar-lg-image"
+                      loading="lazy"
+                      onError={() => setAvatarFailed(true)}
+                    />
                   ) : (
                     <div className="avatar-lg-fallback">{avatarFallbackLetter}</div>
                   )}

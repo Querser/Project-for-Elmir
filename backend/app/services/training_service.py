@@ -14,11 +14,13 @@ from app.schemas.training import CANONICAL_LEVEL_NAMES, TrainingCreate, Training
 _LEVEL_ORDER = {name: idx for idx, name in enumerate(CANONICAL_LEVEL_NAMES)}
 
 AMPLUA_TRAINING_TYPE = "амплуа"
-AMPLUA_POSITION_SPECS: tuple[dict[str, str], ...] = (
-    {"key": "outside_1", "label": "доигровка"},
-    {"key": "outside_2", "label": "доигровка"},
-    {"key": "middle_1", "label": "ЦБ"},
-    {"key": "middle_2", "label": "ЦБ"},
+_AMPLUA_TEAMS: tuple[dict[str, str], ...] = (
+    {"key": "team_1", "label": "Team 1"},
+    {"key": "team_2", "label": "Team 2"},
+)
+_AMPLUA_TEAM_POSITIONS: tuple[dict[str, str], ...] = (
+    {"key": "outside", "label": "доигровка"},
+    {"key": "middle", "label": "ЦБ"},
     {"key": "setter", "label": "связка"},
     {"key": "opposite", "label": "диагональный"},
     {"key": "libero", "label": "либеро"},
@@ -27,6 +29,54 @@ AMPLUA_POSITION_SPECS: tuple[dict[str, str], ...] = (
 _AMPLUA_MAIN_STATUSES = {"active", "enrolled", "confirmed"}
 _AMPLUA_RESERVED_STATUSES = {"reserve", "waitlist", "standby"}
 _AMPLUA_OCCUPIED_STATUSES = _AMPLUA_MAIN_STATUSES | _AMPLUA_RESERVED_STATUSES
+
+
+def _build_amplua_position_specs() -> tuple[dict[str, str], ...]:
+    specs: list[dict[str, str]] = []
+    for team in _AMPLUA_TEAMS:
+        for position in _AMPLUA_TEAM_POSITIONS:
+            key = f'{team["key"]}_{position["key"]}'
+            specs.append(
+                {
+                    "key": key,
+                    "label": f'{team["label"]} · {position["label"]}',
+                    "team_key": team["key"],
+                    "team_label": team["label"],
+                    "position_key": position["key"],
+                    "position_label": position["label"],
+                }
+            )
+    return tuple(specs)
+
+
+AMPLUA_POSITION_SPECS = _build_amplua_position_specs()
+_AMPLUA_SPECS_BY_KEY: dict[str, dict[str, str]] = {spec["key"]: spec for spec in AMPLUA_POSITION_SPECS}
+_AMPLUA_DEFAULT_POSITIONS: dict[str, int] = {spec["key"]: 1 for spec in AMPLUA_POSITION_SPECS}
+_AMPLUA_LEGACY_KEY_ALIASES: dict[str, str] = {
+    # Backward compatibility for old keys:
+    # doigrovka/ЦБ were historically encoded as *_1/*_2 without explicit team,
+    # now they map to Team 1 / Team 2 respectively.
+    "outside_1": "team_1_outside",
+    "outside_2": "team_2_outside",
+    "middle_1": "team_1_middle",
+    "middle_2": "team_2_middle",
+    "setter": "team_1_setter",
+    "opposite": "team_1_opposite",
+    "libero": "team_1_libero",
+    "outside": "team_1_outside",
+    "middle": "team_1_middle",
+    # Tolerant aliases that can come from external clients.
+    "team1_outside": "team_1_outside",
+    "team1_middle": "team_1_middle",
+    "team1_setter": "team_1_setter",
+    "team1_opposite": "team_1_opposite",
+    "team1_libero": "team_1_libero",
+    "team2_outside": "team_2_outside",
+    "team2_middle": "team_2_middle",
+    "team2_setter": "team_2_setter",
+    "team2_opposite": "team_2_opposite",
+    "team2_libero": "team_2_libero",
+}
 
 
 def normalize_training_type(value: Any) -> str | None:
@@ -44,17 +94,32 @@ def is_amplua_training(training: Any) -> bool:
     return normalize_training_type(getattr(training, "training_type", training)) == AMPLUA_TRAINING_TYPE
 
 
+def normalize_amplua_position_key(position_key: str | None) -> str | None:
+    raw = str(position_key or "").strip().lower()
+    if not raw:
+        return None
+    normalized = raw.replace("-", "_")
+    if normalized in _AMPLUA_SPECS_BY_KEY:
+        return normalized
+    return _AMPLUA_LEGACY_KEY_ALIASES.get(normalized)
+
+
+def get_fixed_amplua_positions() -> dict[str, int]:
+    return dict(_AMPLUA_DEFAULT_POSITIONS)
+
+
 def normalize_amplua_positions(value: Any) -> dict[str, int]:
     raw = value if isinstance(value, dict) else {}
-    normalized: dict[str, int] = {}
-    for spec in AMPLUA_POSITION_SPECS:
-        key = spec["key"]
-        item = raw.get(key, 0)
+    normalized: dict[str, int] = {spec["key"]: 0 for spec in AMPLUA_POSITION_SPECS}
+    for raw_key, raw_value in raw.items():
+        key = normalize_amplua_position_key(str(raw_key))
+        if not key:
+            continue
         try:
-            count = int(float(item))
+            count = int(float(raw_value))
         except Exception:
             count = 0
-        normalized[key] = max(0, count)
+        normalized[key] = max(normalized.get(key, 0), max(0, count))
     return normalized
 
 
@@ -106,11 +171,20 @@ def merge_image_gallery(
 
 
 def get_amplua_position_label(position_key: str | None) -> str:
-    key = str(position_key or "").strip()
-    for spec in AMPLUA_POSITION_SPECS:
-        if spec["key"] == key:
-            return spec["label"]
+    meta = get_amplua_position_meta(position_key)
+    if meta:
+        return meta["label"]
     return ""
+
+
+def get_amplua_position_meta(position_key: str | None) -> dict[str, str] | None:
+    key = normalize_amplua_position_key(position_key)
+    if not key:
+        return None
+    spec = _AMPLUA_SPECS_BY_KEY.get(key)
+    if spec:
+        return dict(spec)
+    return None
 
 
 def build_amplua_position_snapshot(
@@ -118,14 +192,14 @@ def build_amplua_position_snapshot(
     positions: Any,
     enrollments: Sequence[Any] | None = None,
 ) -> list[dict[str, Any]]:
-    capacities = normalize_amplua_positions(positions)
+    capacities = get_fixed_amplua_positions()
     occupied: dict[str, int] = {spec["key"]: 0 for spec in AMPLUA_POSITION_SPECS}
 
     for enrollment in enrollments or []:
         status = str(getattr(getattr(enrollment, "status", None), "value", getattr(enrollment, "status", "")) or "").strip().lower()
         if status not in _AMPLUA_OCCUPIED_STATUSES:
             continue
-        position_key = str(getattr(enrollment, "position_key", "") or "").strip()
+        position_key = normalize_amplua_position_key(getattr(enrollment, "position_key", None))
         if position_key in occupied:
             occupied[position_key] += 1
 
@@ -139,6 +213,10 @@ def build_amplua_position_snapshot(
             {
                 "key": key,
                 "label": spec["label"],
+                "team_key": spec["team_key"],
+                "team_label": spec["team_label"],
+                "position_key": spec["position_key"],
+                "position_label": spec["position_label"],
                 "capacity": capacity,
                 "occupied": used,
                 "free": free,
@@ -220,9 +298,11 @@ def create_training(db: Session, data: TrainingCreate) -> Training:
     )
 
     normalized_training_type = normalize_training_type(getattr(data, "training_type", None))
-    normalized_positions = normalize_amplua_positions(getattr(data, "amplua_positions", None))
-    if normalized_training_type != AMPLUA_TRAINING_TYPE:
-        normalized_positions = {}
+    normalized_positions = (
+        get_fixed_amplua_positions()
+        if normalized_training_type == AMPLUA_TRAINING_TYPE
+        else {}
+    )
 
     resolved_capacity_main = (
         amplua_capacity_main(normalized_positions)
@@ -278,12 +358,10 @@ def update_training(db: Session, training: Training, data: TrainingUpdate) -> Tr
         update_data['training_type'] = next_training_type
 
     if 'amplua_positions' in update_data:
-        update_data['amplua_positions'] = normalize_amplua_positions(update_data.get('amplua_positions'))
+        update_data.pop('amplua_positions', None)
 
     if next_training_type == AMPLUA_TRAINING_TYPE:
-        next_positions = normalize_amplua_positions(
-            update_data.get('amplua_positions', getattr(training, 'amplua_positions', None))
-        )
+        next_positions = get_fixed_amplua_positions()
         update_data['amplua_positions'] = next_positions
         update_data['capacity_main'] = amplua_capacity_main(next_positions)
     elif 'training_type' in update_data and next_training_type != AMPLUA_TRAINING_TYPE:

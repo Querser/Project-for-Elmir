@@ -97,6 +97,7 @@ class TgWebAppUser:
     username: Optional[str] = None
     first_name: Optional[str] = None
     last_name: Optional[str] = None
+    avatar_url: Optional[str] = None
 
 
 def _get_env_bot_token() -> Optional[str]:
@@ -156,6 +157,7 @@ def _parse_tg_user_from_init_data(init_data_pairs: dict) -> TgWebAppUser:
         username=user_obj.get("username"),
         first_name=user_obj.get("first_name"),
         last_name=user_obj.get("last_name"),
+        avatar_url=(str(user_obj.get("photo_url") or user_obj.get("photoUrl") or "").strip() or None),
     )
 
 
@@ -276,6 +278,13 @@ def _get_or_create_user_by_telegram(db: Session, tg: TgWebAppUser) -> User:
                 user.last_name = tg.last_name
                 changed = True
 
+            if tg.avatar_url is not None and hasattr(user, "avatar_url"):
+                incoming_avatar = str(tg.avatar_url).strip()
+                current_avatar = str(getattr(user, "avatar_url", None) or "").strip()
+                if incoming_avatar and not current_avatar.startswith("/media/avatars/") and current_avatar != incoming_avatar:
+                    user.avatar_url = incoming_avatar
+                    changed = True
+
             if hasattr(user, "level_id") and getattr(user, "level_id", None) is None:
                 default_level_id = get_default_level_id(db)
                 if default_level_id is not None:
@@ -296,6 +305,8 @@ def _get_or_create_user_by_telegram(db: Session, tg: TgWebAppUser) -> User:
             user.first_name = tg.first_name
         if hasattr(user, "last_name"):
             user.last_name = tg.last_name
+        if hasattr(user, "avatar_url"):
+            user.avatar_url = str(tg.avatar_url or "").strip() or None
         if hasattr(user, "level_id") and default_level_id is not None:
             user.level_id = int(default_level_id)
 

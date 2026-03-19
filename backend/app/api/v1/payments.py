@@ -18,7 +18,12 @@ from app.models.payment import Payment, PaymentStatus
 from app.models.user import User
 from app.services.enrollment_service import enroll_user_to_training
 from app.services.payment_retention_service import purge_payments_older_than_quarter
-from app.services.training_service import AMPLUA_TRAINING_TYPE, get_training_or_404
+from app.services.training_service import (
+    AMPLUA_TRAINING_TYPE,
+    get_amplua_position_meta,
+    get_training_or_404,
+    normalize_amplua_position_key,
+)
 from app.services.training_ui_service import build_training_ui_payload
 from app.services.yookassa_service import (
     create_redirect_payment,
@@ -204,11 +209,29 @@ def create_enrollment_checkout(
     amount: Decimal = checkout["amount"]
     picked_price_tier_id = checkout["picked_price_tier_id"]
     training_type = checkout["training_type"]
+    ui_payload = checkout["ui_payload"]
+    can_enroll_reserve = bool(ui_payload.get("can_enroll_reserve"))
     available_positions = checkout["available_positions"]
     position_slots = checkout["position_slots"]
-    requested_position_key = str(payload.position_key or "").strip() or None
+    raw_requested_position_key = str(payload.position_key or "").strip() or None
+    requested_position_key = (
+        normalize_amplua_position_key(payload.position_key)
+        if training_type == AMPLUA_TRAINING_TYPE
+        else raw_requested_position_key
+    )
+    selected_slot: dict[str, Any] | None = None
 
     if training_type == AMPLUA_TRAINING_TYPE:
+        if raw_requested_position_key and not requested_position_key:
+            raise AppException.validation(
+                message="Выберите корректную позицию",
+                details={
+                    "training_id": int(training.id),
+                    "requested_position_key": raw_requested_position_key,
+                    "available_positions": available_positions,
+                    "position_slots": position_slots,
+                },
+            )
         if requested_position_key:
             slot_map = {str(slot.get("key") or ""): slot for slot in position_slots}
             selected_slot = slot_map.get(requested_position_key)
@@ -221,7 +244,7 @@ def create_enrollment_checkout(
                         "position_slots": position_slots,
                     },
                 )
-            if not bool(selected_slot.get("has_free_slots")):
+            if not bool(selected_slot.get("has_free_slots")) and not can_enroll_reserve:
                 raise AppException.conflict(
                     code=ErrorCode.TRAINING_FULL,
                     message=f'На позиции "{selected_slot.get("label")}" нет свободных мест',
@@ -229,10 +252,22 @@ def create_enrollment_checkout(
                         "training_id": int(training.id),
                         "requested_position_key": requested_position_key,
                         "requested_position_label": selected_slot.get("label"),
+                        "requested_team_key": selected_slot.get("team_key"),
+                        "requested_team_label": selected_slot.get("team_label"),
+                        "requested_position_name": selected_slot.get("position_label"),
                         "available_positions": available_positions,
                         "position_slots": position_slots,
                     },
                 )
+        elif can_enroll_reserve:
+            raise AppException.validation(
+                message='Для резервной записи на ampLua выберите позицию (Team 1 / Team 2)',
+                details={
+                    "training_id": int(training.id),
+                    "available_positions": available_positions,
+                    "position_slots": position_slots,
+                },
+            )
         elif available_positions:
             raise AppException.validation(
                 message='Для тренировки типа "амплуа" выберите позицию',
@@ -276,6 +311,9 @@ def create_enrollment_checkout(
         "training_id": str(training.id),
         "price_tier_id": str(picked_price_tier_id) if picked_price_tier_id is not None else "",
         "position_key": requested_position_key or "",
+        "position_label": str((selected_slot or {}).get("position_label") or ""),
+        "position_team_key": str((selected_slot or {}).get("team_key") or ""),
+        "position_team_label": str((selected_slot or {}).get("team_label") or ""),
     }
     description = f"Тренировка #{training.id}: {str(getattr(training, 'title', '') or '').strip()}"
 
@@ -318,6 +356,10 @@ def create_enrollment_checkout(
             "currency": "RUB",
             "training_id": int(training.id),
             "price_tier_id": picked_price_tier_id,
+            "position_key": requested_position_key,
+            "position_label": (selected_slot or {}).get("position_label"),
+            "position_team_key": (selected_slot or {}).get("team_key"),
+            "position_team_label": (selected_slot or {}).get("team_label"),
             "local_payment_id": int(local_payment.id),
         }
     )
@@ -372,6 +414,7 @@ def get_enrollment_payment_status(
         price_tier_id = _safe_int(metadata.get("price_tier_id"))
 
         if training_id is not None:
+            metadata_position_key = normalize_amplua_position_key(metadata.get("position_key"))
             try:
                 enrollment = enroll_user_to_training(
                     db,
@@ -379,12 +422,17 @@ def get_enrollment_payment_status(
                     user_id=int(user.id),
                     is_paid=True,
                     price_tier_id=price_tier_id,
-                    position_key=str(metadata.get("position_key") or "").strip() or None,
+                    position_key=metadata_position_key,
                 )
+                position_meta = get_amplua_position_meta(getattr(enrollment, "position_key", None))
                 enrollment_payload = {
                     "created_or_updated": True,
                     "enrollment_id": int(getattr(enrollment, "id")),
                     "status": _status_str(getattr(enrollment, "status", None)),
+                    "position_key": getattr(enrollment, "position_key", None),
+                    "position_label": (position_meta or {}).get("position_label"),
+                    "position_team_key": (position_meta or {}).get("team_key"),
+                    "position_team_label": (position_meta or {}).get("team_label"),
                     "error": None,
                 }
             except AppException as exc:
@@ -399,10 +447,20 @@ def get_enrollment_payment_status(
                         if hasattr(existing, "is_paid") and not bool(getattr(existing, "is_paid", False)):
                             existing.is_paid = True
                             db.add(existing)
+                        if metadata_position_key and hasattr(existing, "position_key"):
+                            current_key = normalize_amplua_position_key(getattr(existing, "position_key", None))
+                            if current_key != metadata_position_key:
+                                existing.position_key = metadata_position_key
+                                db.add(existing)
+                        position_meta = get_amplua_position_meta(getattr(existing, "position_key", None))
                         enrollment_payload = {
                             "created_or_updated": True,
                             "enrollment_id": int(getattr(existing, "id")),
                             "status": _status_str(getattr(existing, "status", None)),
+                            "position_key": getattr(existing, "position_key", None),
+                            "position_label": (position_meta or {}).get("position_label"),
+                            "position_team_key": (position_meta or {}).get("team_key"),
+                            "position_team_label": (position_meta or {}).get("team_label"),
                             "error": None,
                         }
                     else:

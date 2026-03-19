@@ -608,6 +608,12 @@ def _send_main_menu(db: Session, user: User) -> None:
 def _send_start_flow(db: Session, user: User, *, is_new_user: bool) -> None:
     _send_ban_notice_if_needed(db, user)
     if _is_profile_complete(user):
+        tg_id = int(getattr(user, "telegram_id", 0) or 0)
+        if tg_id:
+            send_bot_message_to_user(
+                telegram_id=tg_id,
+                text="Вы уже зарегистрированы в MosVolley и можете сразу перейти в мини-приложение.",
+            )
         _send_main_menu(db, user)
         return
 
@@ -615,9 +621,9 @@ def _send_start_flow(db: Session, user: User, *, is_new_user: bool) -> None:
     if tg_id:
         intro_text = (
             "Добро пожаловать в MosVolley.\n"
-            "Чтобы открыть мини-приложение, нужно завершить регистрацию."
+            "Чтобы завершить регистрацию, отправьте ваш номер телефона через кнопку ниже."
             if is_new_user
-            else "Ваш профиль заполнен не полностью. Давайте завершим регистрацию."
+            else "Ваш профиль заполнен не полностью. Чтобы завершить регистрацию, отправьте номер телефона."
         )
         send_bot_message_to_user(
             telegram_id=tg_id,
@@ -754,47 +760,81 @@ def _handle_text_command(db: Session, user: User, text: str, *, is_new_user: boo
 
 
 def handle_telegram_update(db: Session, update: dict[str, Any]) -> dict[str, Any]:
-    message = update.get("message")
-    if message:
-        user_obj = message.get("from") or {}
-        tg_id = int(user_obj.get("id") or 0)
-        if not tg_id:
-            return {"handled": False, "reason": "no_user_id"}
+    fallback_tg_id = 0
+    try:
+        message = update.get("message") or update.get("edited_message")
+        if message:
+            user_obj = message.get("from") or {}
+            tg_id = int(user_obj.get("id") or 0)
+            fallback_tg_id = tg_id
+            if not tg_id:
+                return {"handled": False, "reason": "no_user_id"}
 
-        existing_user = db.query(User).filter(User.telegram_id == tg_id).one_or_none()
-        is_new_user = existing_user is None
-        user = get_or_create_user_from_telegram(
-            db,
-            telegram_id=tg_id,
-            username=_safe_username(user_obj.get("username")),
-            first_name=(user_obj.get("first_name") or "").strip() or None,
-            last_name=(user_obj.get("last_name") or "").strip() or None,
-        )
-        _save_avatar_if_possible(db, user)
+            existing_user = db.query(User).filter(User.telegram_id == tg_id).one_or_none()
+            is_new_user = existing_user is None
+            user = get_or_create_user_from_telegram(
+                db,
+                telegram_id=tg_id,
+                username=_safe_username(user_obj.get("username")),
+                first_name=(user_obj.get("first_name") or "").strip() or None,
+                last_name=(user_obj.get("last_name") or "").strip() or None,
+            )
+            _save_avatar_if_possible(db, user)
 
-        if message.get("contact"):
-            _process_contact(db, message, user)
-            return {"handled": True, "kind": "contact"}
+            if message.get("contact"):
+                _process_contact(db, message, user)
+                return {"handled": True, "kind": "contact"}
 
-        text = (message.get("text") or "").strip()
-        if text:
-            _handle_text_command(db, user, text, is_new_user=is_new_user)
-            return {"handled": True, "kind": "text"}
+            text = (message.get("text") or message.get("caption") or "").strip()
+            if text:
+                _handle_text_command(db, user, text, is_new_user=is_new_user)
+                return {"handled": True, "kind": "text"}
 
-        send_bot_message_to_user(
-            telegram_id=tg_id,
-            text="Поддерживаются текстовые команды и отправка контакта.",
-        )
-        return {"handled": True, "kind": "unsupported_message"}
+            send_bot_message_to_user(
+                telegram_id=tg_id,
+                text="Поддерживаются текстовые команды и отправка контакта.",
+            )
+            return {"handled": True, "kind": "unsupported_message"}
 
-    callback = update.get("callback_query")
-    if callback:
-        callback_id = str(callback.get("id") or "")
-        if callback_id:
-            _bot_api.answer_callback_query(callback_id, "Откройте меню через /start")
-        return {"handled": True, "kind": "callback_query"}
+        callback = update.get("callback_query")
+        if callback:
+            callback_id = str(callback.get("id") or "")
+            callback_data = _normalize_text(str(callback.get("data") or ""))
+            callback_user = callback.get("from") or {}
+            tg_id = int(callback_user.get("id") or 0)
+            fallback_tg_id = tg_id
 
-    return {"handled": False, "reason": "unsupported_update"}
+            if tg_id:
+                existing_user = db.query(User).filter(User.telegram_id == tg_id).one_or_none()
+                is_new_user = existing_user is None
+                user = get_or_create_user_from_telegram(
+                    db,
+                    telegram_id=tg_id,
+                    username=_safe_username(callback_user.get("username")),
+                    first_name=(callback_user.get("first_name") or "").strip() or None,
+                    last_name=(callback_user.get("last_name") or "").strip() or None,
+                )
+                _save_avatar_if_possible(db, user)
+
+                if callback_data in {"/start", "start", "/menu", "menu"}:
+                    _send_start_flow(db, user, is_new_user=is_new_user)
+                    if callback_id:
+                        _bot_api.answer_callback_query(callback_id, "Меню обновлено")
+                    return {"handled": True, "kind": "callback_start"}
+
+            if callback_id:
+                _bot_api.answer_callback_query(callback_id, "Откройте меню через /start")
+            return {"handled": True, "kind": "callback_query"}
+
+        return {"handled": False, "reason": "unsupported_update"}
+    except Exception:
+        log.exception("Failed to handle telegram update")
+        if fallback_tg_id:
+            send_bot_message_to_user(
+                telegram_id=fallback_tg_id,
+                text="Не удалось обработать запрос. Попробуйте снова команду /start.",
+            )
+        return {"handled": False, "reason": "internal_error"}
 
 
 def webhook_status() -> dict[str, Any]:

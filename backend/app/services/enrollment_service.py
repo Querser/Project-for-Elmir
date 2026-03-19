@@ -19,6 +19,7 @@ from app.services.ban_service import get_active_ban
 from app.services.training_service import (
     build_amplua_position_snapshot,
     is_amplua_training,
+    normalize_amplua_position_key,
 )
 from app.services.yookassa_service import create_refund
 
@@ -450,8 +451,7 @@ def enroll_user_to_training(
         )
 
     training_is_amplua = is_amplua_training(training)
-    requested_position_key = str(position_key or "").strip() if training_is_amplua else ""
-    requested_position_key = requested_position_key or None
+    requested_position_key = normalize_amplua_position_key(position_key) if training_is_amplua else None
 
     existing = (
         db.query(Enrollment)
@@ -479,6 +479,7 @@ def enroll_user_to_training(
     if training_is_amplua:
         amplua_slots, amplua_by_key = _build_amplua_context(training, rows)
         main_cap = sum(int(slot.get("capacity", 0) or 0) for slot in amplua_slots)
+        can_put_to_reserve = bool(main_cap and active_cnt >= main_cap and reserve_cap and reserve_cnt < reserve_cap)
 
         if requested_position_key:
             selected_slot = amplua_by_key.get(requested_position_key)
@@ -492,7 +493,7 @@ def enroll_user_to_training(
                         "position_slots": amplua_slots,
                     },
                 )
-            if not selected_slot.get("has_free_slots"):
+            if not selected_slot.get("has_free_slots") and not can_put_to_reserve:
                 raise AppException.conflict(
                     ErrorCode.TRAINING_FULL,
                     f'На позиции "{selected_slot["label"]}" нет свободных мест',
@@ -500,6 +501,9 @@ def enroll_user_to_training(
                         "training_id": training_id,
                         "requested_position_key": requested_position_key,
                         "requested_position_label": selected_slot["label"],
+                        "requested_team_key": selected_slot.get("team_key"),
+                        "requested_team_label": selected_slot.get("team_label"),
+                        "requested_position_name": selected_slot.get("position_label"),
                         "available_positions": [slot for slot in amplua_slots if slot.get("has_free_slots")],
                         "position_slots": amplua_slots,
                     },

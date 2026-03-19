@@ -17,6 +17,8 @@
   --radius-md: 14px;
   --radius-pill: 999px;
   --shadow-soft: 0 10px 30px rgba(15, 23, 42, 0.06);
+  --safe-top-inset: env(safe-area-inset-top, 0px);
+  --safe-top-offset: max(6px, var(--safe-top-inset));
 }
 
 * { box-sizing: border-box; padding: 0; margin: 0; }
@@ -48,6 +50,7 @@ button, input, select {
   display: flex;
   flex-direction: column;
   position: relative;
+  padding-top: var(--safe-top-offset);
   padding-bottom: calc(80px + env(safe-area-inset-bottom)); /* Отступ под таббар + safe-area */
 }
 
@@ -309,7 +312,7 @@ button, input, select {
 }
 .hero-top {
   position: absolute;
-  top: 16px;
+  top: calc(10px + var(--safe-top-inset));
   left: 16px;
   right: 16px;
   display: flex;
@@ -329,7 +332,7 @@ button, input, select {
 .hero-time-pill {
   position: absolute;
   left: 16px;
-  top: 68px;
+  top: calc(62px + var(--safe-top-inset));
   z-index: 2;
   background-color: rgba(17, 24, 39, 0.82);
   color: #f9fafb;
@@ -694,6 +697,7 @@ button, input, select {
   z-index: 999;
   overflow: auto;
   -webkit-overflow-scrolling: touch;
+  padding-top: var(--safe-top-offset);
   padding-bottom: calc(80px + env(safe-area-inset-bottom));
   display: flex;
   justify-content: center;
@@ -703,7 +707,7 @@ button, input, select {
 .overlay-content {
   width: 100%;
   max-width: 480px;
-  min-height: 100%;
+  min-height: calc(100% - var(--safe-top-offset));
 }
 
 @media (min-width: 768px) {
@@ -896,7 +900,7 @@ body.theme-dark .booking-position-option.is-selected .booking-position-option-ch
     right: 8px;
   }
   .hero-time-pill {
-    top: 62px;
+    top: calc(58px + var(--safe-top-inset));
   }
 }
 

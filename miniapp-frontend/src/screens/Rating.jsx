@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { apiFetch, extractItems } from "../api";
 import RefreshButton from "../components/RefreshButton";
+import { resolveMediaUrl } from "../utils/media";
 
 // Канонические вкладки уровней рейтинга
 const LEVEL_TABS = [
@@ -58,15 +59,19 @@ function pickAvatarLetter(name) {
   return s ? s[0].toUpperCase() : "•";
 }
 
-function resolveAvatarUrl(raw) {
-  const value = normalizeStr(raw);
-  if (!value) return "";
-  if (/^https?:\/\//i.test(value)) return value;
-  try {
-    return new URL(value, window.location.origin).toString();
-  } catch {
-    return value;
-  }
+function AvatarImage({ src, alt, className, fallback }) {
+  const [failedSrc, setFailedSrc] = useState("");
+  if (!src || failedSrc === src) return fallback;
+
+  return (
+    <img
+      src={src}
+      alt={alt}
+      className={className}
+      loading="lazy"
+      onError={() => setFailedSrc(src)}
+    />
+  );
 }
 
 function pickScore(item) {
@@ -204,7 +209,7 @@ export default function Rating() {
         player,
         id: player?.id ?? it?.player_id ?? it?.user_id ?? it?.id ?? idx,
         name,
-        avatarUrl: resolveAvatarUrl(player?.avatar_url ?? it?.avatar_url ?? it?.avatarUrl),
+        avatarUrl: resolveMediaUrl(player?.avatar_url ?? it?.avatar_url ?? it?.avatarUrl),
         avatarLetter: pickAvatarLetter(name),
         score: Number(score) || 0,
         cups: Number(pickCups(it)) || 0,
@@ -307,7 +312,7 @@ export default function Rating() {
 
     const name = pickPlayerName(playerModalProfile);
     const avatarLetter = pickAvatarLetter(name);
-    const avatarUrl = resolveAvatarUrl(playerModalProfile?.avatar_url);
+    const avatarUrl = resolveMediaUrl(playerModalProfile?.avatar_url);
 
     const lvlRaw =
       playerModalProfile?.level_name ||
@@ -434,11 +439,12 @@ export default function Rating() {
             >
               <div className="player-place">{p.place}</div>
               <div className="player-avatar">
-                {p.avatarUrl ? (
-                  <img src={p.avatarUrl} alt={p.name} className="player-avatar-image" />
-                ) : (
-                  p.avatarLetter
-                )}
+                <AvatarImage
+                  src={p.avatarUrl}
+                  alt={p.name}
+                  className="player-avatar-image"
+                  fallback={p.avatarLetter}
+                />
               </div>
               <div className="player-main">
                 <div className="player-name">{p.name}</div>
@@ -493,15 +499,12 @@ export default function Rating() {
               <>
                 <div className="profile-card" style={{ marginTop: 12, cursor: "default" }}>
                   <div className="profile-avatar">
-                    {playerModalView.avatarUrl ? (
-                      <img
-                        src={playerModalView.avatarUrl}
-                        alt={playerModalView.name}
-                        className="profile-avatar-image"
-                      />
-                    ) : (
-                      playerModalView.avatarLetter
-                    )}
+                    <AvatarImage
+                      src={playerModalView.avatarUrl}
+                      alt={playerModalView.name}
+                      className="profile-avatar-image"
+                      fallback={playerModalView.avatarLetter}
+                    />
                   </div>
 
                   <div className="profile-main">
