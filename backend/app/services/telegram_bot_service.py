@@ -235,6 +235,10 @@ def _log_preview(value: Any, *, limit: int = 160) -> str:
     return text
 
 
+def _diag(message: str) -> None:
+    print(f"[TELEGRAM_DIAG] {message}", flush=True)
+
+
 def _safe_username(username: str | None) -> str | None:
     v = (username or "").strip()
     if not v:
@@ -416,6 +420,10 @@ def send_bot_message_to_user(*, telegram_id: int, text: str, reply_markup: dict[
             telegram_id,
             _log_preview(text),
             bool(reply_markup),
+        )
+        _diag(
+            f"sendMessage_failed tg_id={telegram_id} has_reply_markup={bool(reply_markup)} "
+            f"text={_log_preview(text)!r}"
         )
     return ok
 
@@ -632,6 +640,11 @@ def _send_start_flow(db: Session, user: User, *, is_new_user: bool) -> None:
         profile_complete,
         bool((getattr(user, "phone", None) or "").strip()),
     )
+    _diag(
+        "start_flow_begin "
+        f"tg_id={tg_id} user_id={getattr(user, 'id', None)} "
+        f"is_new_user={bool(is_new_user)} profile_complete={profile_complete}"
+    )
     _send_ban_notice_if_needed(db, user)
     if profile_complete:
         if tg_id:
@@ -640,6 +653,7 @@ def _send_start_flow(db: Session, user: User, *, is_new_user: bool) -> None:
                 text="Вы уже зарегистрированы в MosVolley и можете сразу перейти в мини-приложение.",
             )
         log.info("Telegram /start authorized branch tg_id=%s", tg_id)
+        _diag(f"start_flow_authorized tg_id={tg_id}")
         _send_main_menu(db, user)
         return
 
@@ -656,6 +670,7 @@ def _send_start_flow(db: Session, user: User, *, is_new_user: bool) -> None:
             text=intro_text,
         )
     log.info("Telegram /start profile prompt tg_id=%s is_new_user=%s", tg_id, bool(is_new_user))
+    _diag(f"start_flow_profile_prompt tg_id={tg_id} is_new_user={bool(is_new_user)}")
     _send_profile_prompt(db, user)
 
 
@@ -760,6 +775,7 @@ def _handle_text_command(db: Session, user: User, text: str, *, is_new_user: boo
             command,
             _log_preview(text),
         )
+        _diag(f"start_command_matched tg_id={tg_id} command={command!r} text={_log_preview(text)!r}")
         _send_start_flow(db, user, is_new_user=is_new_user)
         return
 
@@ -807,6 +823,11 @@ def handle_telegram_update(db: Session, update: dict[str, Any]) -> dict[str, Any
         update_id,
         bool(update.get("message") or update.get("edited_message")),
         bool(update.get("callback_query")),
+    )
+    _diag(
+        f"update_received update_id={update_id} "
+        f"has_message={bool(update.get('message') or update.get('edited_message'))} "
+        f"has_callback={bool(update.get('callback_query'))}"
     )
     try:
         message = update.get("message") or update.get("edited_message")

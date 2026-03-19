@@ -21,6 +21,10 @@ router = APIRouter(prefix="/telegram", tags=["telegram"])
 log = logging.getLogger("app.telegram.webhook")
 
 
+def _diag(message: str) -> None:
+    print(f"[TELEGRAM_DIAG] {message}", flush=True)
+
+
 class WebhookConfigIn(BaseModel):
     url: str | None = Field(default=None, max_length=1000)
     secret_token: str | None = Field(default=None, max_length=256)
@@ -40,6 +44,11 @@ def telegram_webhook(
         bool(payload.get("message") or payload.get("edited_message")),
         bool(payload.get("callback_query")),
     )
+    _diag(
+        f"webhook_request path={request.url.path} update_id={update_id} "
+        f"has_message={bool(payload.get('message') or payload.get('edited_message'))} "
+        f"has_callback={bool(payload.get('callback_query'))}"
+    )
     settings = get_settings()
     expected_secret = (settings.telegram_bot_webhook_secret or "").strip()
     if expected_secret:
@@ -56,6 +65,10 @@ def telegram_webhook(
         bool(result.get("handled")),
         result.get("kind"),
         result.get("reason"),
+    )
+    _diag(
+        f"webhook_handled update_id={update_id} handled={bool(result.get('handled'))} "
+        f"kind={result.get('kind')} reason={result.get('reason')}"
     )
     return {"ok": True, "result": result}
 
