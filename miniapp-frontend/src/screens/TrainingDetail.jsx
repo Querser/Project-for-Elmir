@@ -1262,6 +1262,7 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
   }, [training, participantsMain.length, participantsReserve.length]);
 
   const capacityMain = useMemo(() => toNumber(training?.capacity_main) ?? 0, [training]);
+  const capacityReserve = useMemo(() => toNumber(training?.capacity_reserve) ?? 0, [training]);
 
   const freePlaces = useMemo(() => {
     const fp = toNumber(training?.free_places);
@@ -1270,6 +1271,11 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
     const left = capacityMain - occupied;
     return left >= 0 ? left : 0;
   }, [training, capacityMain]);
+  const reserveFreePlaces = useMemo(() => {
+    const occupiedReserve = toNumber(training?.occupied_reserve) ?? participantsReserve.length;
+    const left = capacityReserve - occupiedReserve;
+    return left >= 0 ? left : 0;
+  }, [training, participantsReserve.length, capacityReserve]);
 
   const isEnrolled = useMemo(() => {
     const st = (training?.user_enrollment_status ?? '').toString();
@@ -1872,6 +1878,12 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
                 <span>Свободно</span>
                 <span>{freePlaces} мест</span>
               </div>
+              {isAmpLuaTraining ? (
+                <div className="participants-row">
+                  <span>Резерв свободно</span>
+                  <span>{reserveFreePlaces} мест</span>
+                </div>
+              ) : null}
 
               <div className="participants-list-block">
                 <div className="participants-list-title">Основа ({participantsMain.length})</div>
