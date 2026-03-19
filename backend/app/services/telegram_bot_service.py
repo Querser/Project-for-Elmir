@@ -228,6 +228,13 @@ def _normalize_text(value: str | None) -> str:
     return (value or "").strip().lower()
 
 
+def _log_preview(value: Any, *, limit: int = 160) -> str:
+    text = str(value or "").replace("\r", " ").replace("\n", " ").strip()
+    if len(text) > limit:
+        return text[: limit - 3] + "..."
+    return text
+
+
 def _safe_username(username: str | None) -> str | None:
     v = (username or "").strip()
     if not v:
@@ -398,11 +405,19 @@ def _format_notification_message(title: str, text: str, url: str | None = None) 
 
 
 def send_bot_message_to_user(*, telegram_id: int, text: str, reply_markup: dict[str, Any] | None = None) -> bool:
-    return _bot_api.send_message(
+    ok = _bot_api.send_message(
         chat_id=telegram_id,
         text=text,
         reply_markup=reply_markup,
     )
+    if not ok:
+        log.warning(
+            "Telegram sendMessage failed tg_id=%s text_preview=%r has_reply_markup=%s",
+            telegram_id,
+            _log_preview(text),
+            bool(reply_markup),
+        )
+    return ok
 
 
 def send_bot_notification_to_users(
@@ -595,7 +610,7 @@ def _send_main_menu(db: Session, user: User) -> None:
         telegram_id=tg_id,
     )
 
-    send_bot_message_to_user(
+    ok = send_bot_message_to_user(
         telegram_id=tg_id,
         text=(
             "Профиль готов. Вы можете открыть MosVolley, смотреть уведомления,"
@@ -603,17 +618,28 @@ def _send_main_menu(db: Session, user: User) -> None:
         ),
         reply_markup=keyboard,
     )
+    log.info("Telegram menu send result tg_id=%s ok=%s include_admin=%s", tg_id, ok, _is_admin_user(user))
 
 
 def _send_start_flow(db: Session, user: User, *, is_new_user: bool) -> None:
+    tg_id = int(getattr(user, "telegram_id", 0) or 0)
+    profile_complete = _is_profile_complete(user)
+    log.info(
+        "Telegram /start flow begin tg_id=%s user_id=%s is_new_user=%s profile_complete=%s has_phone=%s",
+        tg_id,
+        getattr(user, "id", None),
+        bool(is_new_user),
+        profile_complete,
+        bool((getattr(user, "phone", None) or "").strip()),
+    )
     _send_ban_notice_if_needed(db, user)
-    if _is_profile_complete(user):
-        tg_id = int(getattr(user, "telegram_id", 0) or 0)
+    if profile_complete:
         if tg_id:
             send_bot_message_to_user(
                 telegram_id=tg_id,
                 text="Вы уже зарегистрированы в MosVolley и можете сразу перейти в мини-приложение.",
             )
+        log.info("Telegram /start authorized branch tg_id=%s", tg_id)
         _send_main_menu(db, user)
         return
 
@@ -629,6 +655,7 @@ def _send_start_flow(db: Session, user: User, *, is_new_user: bool) -> None:
             telegram_id=tg_id,
             text=intro_text,
         )
+    log.info("Telegram /start profile prompt tg_id=%s is_new_user=%s", tg_id, bool(is_new_user))
     _send_profile_prompt(db, user)
 
 
@@ -718,8 +745,21 @@ def _handle_text_command(db: Session, user: User, text: str, *, is_new_user: boo
     normalized = _normalize_text(text)
     tg_id = int(getattr(user, "telegram_id", 0))
     command = _extract_bot_command(normalized)
+    log.info(
+        "Telegram text command tg_id=%s command=%r normalized=%r is_new_user=%s",
+        tg_id,
+        command,
+        _log_preview(normalized),
+        bool(is_new_user),
+    )
 
     if command in {"/start", "/menu"} or normalized in {"start", "menu"}:
+        log.info(
+            "Telegram /start matched tg_id=%s command=%r text_preview=%r",
+            tg_id,
+            command,
+            _log_preview(text),
+        )
         _send_start_flow(db, user, is_new_user=is_new_user)
         return
 
@@ -761,6 +801,13 @@ def _handle_text_command(db: Session, user: User, text: str, *, is_new_user: boo
 
 def handle_telegram_update(db: Session, update: dict[str, Any]) -> dict[str, Any]:
     fallback_tg_id = 0
+    update_id = update.get("update_id")
+    log.info(
+        "Telegram update received update_id=%s has_message=%s has_callback=%s",
+        update_id,
+        bool(update.get("message") or update.get("edited_message")),
+        bool(update.get("callback_query")),
+    )
     try:
         message = update.get("message") or update.get("edited_message")
         if message:
@@ -768,6 +815,7 @@ def handle_telegram_update(db: Session, update: dict[str, Any]) -> dict[str, Any
             tg_id = int(user_obj.get("id") or 0)
             fallback_tg_id = tg_id
             if not tg_id:
+                log.warning("Telegram update ignored: missing user id update_id=%s", update_id)
                 return {"handled": False, "reason": "no_user_id"}
 
             existing_user = db.query(User).filter(User.telegram_id == tg_id).one_or_none()
@@ -782,10 +830,19 @@ def handle_telegram_update(db: Session, update: dict[str, Any]) -> dict[str, Any
             sync_telegram_avatar_for_user(db, user)
 
             if message.get("contact"):
+                log.info("Telegram contact message update_id=%s tg_id=%s", update_id, tg_id)
                 _process_contact(db, message, user)
                 return {"handled": True, "kind": "contact"}
 
             text = (message.get("text") or message.get("caption") or "").strip()
+            log.info(
+                "Telegram message branch update_id=%s tg_id=%s chat_id=%s has_contact=%s text_preview=%r",
+                update_id,
+                tg_id,
+                (message.get("chat") or {}).get("id"),
+                bool(message.get("contact")),
+                _log_preview(text),
+            )
             if text:
                 _handle_text_command(db, user, text, is_new_user=is_new_user)
                 return {"handled": True, "kind": "text"}
@@ -803,6 +860,12 @@ def handle_telegram_update(db: Session, update: dict[str, Any]) -> dict[str, Any
             callback_user = callback.get("from") or {}
             tg_id = int(callback_user.get("id") or 0)
             fallback_tg_id = tg_id
+            log.info(
+                "Telegram callback branch update_id=%s tg_id=%s callback_data=%r",
+                update_id,
+                tg_id,
+                _log_preview(callback_data),
+            )
 
             if tg_id:
                 existing_user = db.query(User).filter(User.telegram_id == tg_id).one_or_none()
@@ -826,6 +889,7 @@ def handle_telegram_update(db: Session, update: dict[str, Any]) -> dict[str, Any
                 _bot_api.answer_callback_query(callback_id, "Откройте меню через /start")
             return {"handled": True, "kind": "callback_query"}
 
+        log.info("Telegram update unsupported update_id=%s keys=%s", update_id, sorted(update.keys()))
         return {"handled": False, "reason": "unsupported_update"}
     except Exception:
         log.exception("Failed to handle telegram update")

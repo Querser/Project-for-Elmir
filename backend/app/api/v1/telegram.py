@@ -32,6 +32,14 @@ def telegram_webhook(
     request: Request,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
+    update_id = payload.get("update_id")
+    log.info(
+        "Telegram webhook request path=%s update_id=%s has_message=%s has_callback=%s",
+        request.url.path,
+        update_id,
+        bool(payload.get("message") or payload.get("edited_message")),
+        bool(payload.get("callback_query")),
+    )
     settings = get_settings()
     expected_secret = (settings.telegram_bot_webhook_secret or "").strip()
     if expected_secret:
@@ -42,6 +50,13 @@ def telegram_webhook(
             log.warning("Telegram webhook called without secret header while secret is configured")
 
     result = handle_telegram_update(db, payload)
+    log.info(
+        "Telegram webhook handled update_id=%s handled=%s kind=%s reason=%s",
+        update_id,
+        bool(result.get("handled")),
+        result.get("kind"),
+        result.get("reason"),
+    )
     return {"ok": True, "result": result}
 
 
