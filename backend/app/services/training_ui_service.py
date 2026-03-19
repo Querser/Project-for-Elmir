@@ -387,6 +387,8 @@ def build_training_ui_payload(
         ]
 
     payload = {
+        "capacity_main": capacity_main,
+        "capacity_reserve": capacity_reserve,
         "occupied_main": occupied_main,
         "occupied_reserve": occupied_reserve,
         "free_places": free_places,
