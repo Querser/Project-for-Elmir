@@ -451,12 +451,33 @@ button, input, select {
   font-weight: 700;
   color: var(--text-main);
 }
+.participants-team-groups {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.participants-team-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.participants-team-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
 .participants-list {
   list-style: none;
   margin-top: 6px;
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+.participants-team-block .participants-list {
+  margin-top: 0;
 }
 .participants-item {
   border-radius: 10px;

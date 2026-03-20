@@ -145,6 +145,32 @@ function participantDisplayName(item) {
   return 'Игрок';
 }
 
+function normalizePositionKeyWithoutTeam(value) {
+  const key = normalizePositionKey(value);
+  if (!key) return '';
+
+  const trimmedTeamPrefix = key.replace(/^team[_-]?[12][_-]?/, '');
+  if (trimmedTeamPrefix && trimmedTeamPrefix !== key) return trimmedTeamPrefix;
+
+  const trimmedShortPrefix = key.replace(/^t[12][_-]?/, '');
+  if (trimmedShortPrefix && trimmedShortPrefix !== key) return trimmedShortPrefix;
+
+  return key;
+}
+
+function participantPositionLabel(item) {
+  const rawKey = item?.position_key ?? item?.positionKey ?? '';
+  const normalizedKey = normalizePositionKeyWithoutTeam(rawKey);
+  const rawLabel =
+    item?.position_label ??
+    item?.positionLabel ??
+    item?.position_name ??
+    item?.positionName ??
+    '';
+
+  return normalizePositionLabel(rawLabel || normalizedKey || rawKey, normalizedKey || rawKey);
+}
+
 function participantMeta(item, { isAmpLua = false } = {}) {
   const parts = [];
   const rawUsername = maybeFixUtf8Mojibake(item?.username ?? '').toString().trim();
@@ -156,11 +182,7 @@ function participantMeta(item, { isAmpLua = false } = {}) {
   if (levelName) parts.push(levelName);
 
   if (isAmpLua) {
-    const positionLabel = positionDisplayLabelFromKey(
-      item?.position_key ?? item?.positionKey ?? '',
-      item?.position_label ?? item?.positionLabel ?? item?.position_name ?? item?.positionName ?? '',
-      item?.team ?? item?.team_name ?? item?.teamName ?? item?.team_id ?? item?.teamId ?? '',
-    );
+    const positionLabel = participantPositionLabel(item);
     if (positionLabel) parts.push(`Позиция: ${positionLabel}`);
   }
 
@@ -398,6 +420,51 @@ function inferTeamNumberFromPositionKey(positionKey) {
   if (suffix) return Number(suffix[1]);
 
   return null;
+}
+
+function participantTeamNumber(item) {
+  if (!item || typeof item !== 'object') return null;
+
+  const teamRaw =
+    item?.team ??
+    item?.team_name ??
+    item?.teamName ??
+    item?.team_label ??
+    item?.teamLabel ??
+    item?.team_key ??
+    item?.teamKey ??
+    item?.team_id ??
+    item?.teamId ??
+    item?.side ??
+    item?.group ??
+    '';
+
+  const fromTeam = inferTeamNumberFromText(teamRaw);
+  if (fromTeam) return fromTeam;
+  return inferTeamNumberFromPositionKey(item?.position_key ?? item?.positionKey ?? '');
+}
+
+function groupParticipantsByTeam(items) {
+  const groups = {
+    team1: [],
+    team2: [],
+    other: [],
+  };
+
+  if (!Array.isArray(items)) return groups;
+
+  items.forEach((item) => {
+    const teamNumber = participantTeamNumber(item);
+    if (teamNumber === 1) {
+      groups.team1.push(item);
+    } else if (teamNumber === 2) {
+      groups.team2.push(item);
+    } else {
+      groups.other.push(item);
+    }
+  });
+
+  return groups;
 }
 
 function buildTeamLabel(teamRaw, teamNumber) {
@@ -1204,6 +1271,60 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
     );
   };
 
+  const renderParticipantsList = (items, listPrefix) => (
+    <ul className="participants-list">
+      {items.map((p, idx) => {
+        const meta = participantMeta(p, { isAmpLua: isAmpLuaTraining });
+        return (
+          <li key={`${listPrefix}-${p?.enrollment_id ?? p?.user_id ?? idx}`} className="participants-item">
+            <button
+              type="button"
+              className={`participants-item-btn ${p?.user_id ? 'clickable' : ''}`}
+              onClick={() => openParticipantProfile(p?.user_id)}
+              disabled={!p?.user_id}
+            >
+              <span className="participants-avatar">
+                <AvatarImage
+                  src={resolveAvatarUrl(p?.avatar_url)}
+                  alt={participantDisplayName(p)}
+                  className="participants-avatar-image"
+                  fallback={participantAvatarLetter(p)}
+                />
+              </span>
+              <span className="participants-user">
+                <span className="participants-name">{participantDisplayName(p)}</span>
+                {meta ? <span className="participants-meta">{meta}</span> : null}
+              </span>
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+
+  const renderParticipantsByTeams = (groups, listPrefix) => (
+    <div className="participants-team-groups">
+      {groups.team1.length ? (
+        <div className="participants-team-block">
+          <div className="participants-team-title">{`Команда 1 (${groups.team1.length})`}</div>
+          {renderParticipantsList(groups.team1, `${listPrefix}-team1`)}
+        </div>
+      ) : null}
+      {groups.team2.length ? (
+        <div className="participants-team-block">
+          <div className="participants-team-title">{`Команда 2 (${groups.team2.length})`}</div>
+          {renderParticipantsList(groups.team2, `${listPrefix}-team2`)}
+        </div>
+      ) : null}
+      {groups.other.length ? (
+        <div className="participants-team-block">
+          <div className="participants-team-title">{`Без команды (${groups.other.length})`}</div>
+          {renderParticipantsList(groups.other, `${listPrefix}-other`)}
+        </div>
+      ) : null}
+    </div>
+  );
+
   const startAt = useMemo(
     () => parseDate(training?.starts_at ?? training?.start_at ?? training?.startsAt ?? training?.startAt),
     [training],
@@ -1254,6 +1375,14 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
   const participantsReserve = useMemo(
     () => (Array.isArray(training?.participants_reserve) ? training.participants_reserve : []),
     [training],
+  );
+  const participantsMainByTeam = useMemo(
+    () => groupParticipantsByTeam(participantsMain),
+    [participantsMain],
+  );
+  const participantsReserveByTeam = useMemo(
+    () => groupParticipantsByTeam(participantsReserve),
+    [participantsReserve],
   );
   const participantsTotal = useMemo(() => {
     const fromApi = toNumber(training?.participants_total);
@@ -1888,34 +2017,9 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
               <div className="participants-list-block">
                 <div className="participants-list-title">Основа ({participantsMain.length})</div>
                 {participantsMain.length ? (
-                  <ul className="participants-list">
-                    {participantsMain.map((p, idx) => {
-                      const meta = participantMeta(p, { isAmpLua: isAmpLuaTraining });
-                      return (
-                        <li key={`m-${p?.enrollment_id ?? p?.user_id ?? idx}`} className="participants-item">
-                          <button
-                            type="button"
-                            className={`participants-item-btn ${p?.user_id ? 'clickable' : ''}`}
-                            onClick={() => openParticipantProfile(p?.user_id)}
-                            disabled={!p?.user_id}
-                          >
-                            <span className="participants-avatar">
-                              <AvatarImage
-                                src={resolveAvatarUrl(p?.avatar_url)}
-                                alt={participantDisplayName(p)}
-                                className="participants-avatar-image"
-                                fallback={participantAvatarLetter(p)}
-                              />
-                            </span>
-                            <span className="participants-user">
-                              <span className="participants-name">{participantDisplayName(p)}</span>
-                              {meta ? <span className="participants-meta">{meta}</span> : null}
-                            </span>
-                          </button>
-                        </li>
-                      );
-                    })}
-                  </ul>
+                  isAmpLuaTraining
+                    ? renderParticipantsByTeams(participantsMainByTeam, 'm')
+                    : renderParticipantsList(participantsMain, 'm')
                 ) : (
                   <div className="participants-empty">Пока никто не записан в основу</div>
                 )}
@@ -1924,34 +2028,9 @@ export default function TrainingDetail({ trainingId, onBack, onChanged }) {
               <div className="participants-list-block">
                 <div className="participants-list-title">Резерв ({participantsReserve.length})</div>
                 {participantsReserve.length ? (
-                  <ul className="participants-list">
-                    {participantsReserve.map((p, idx) => {
-                      const meta = participantMeta(p, { isAmpLua: isAmpLuaTraining });
-                      return (
-                        <li key={`r-${p?.enrollment_id ?? p?.user_id ?? idx}`} className="participants-item">
-                          <button
-                            type="button"
-                            className={`participants-item-btn ${p?.user_id ? 'clickable' : ''}`}
-                            onClick={() => openParticipantProfile(p?.user_id)}
-                            disabled={!p?.user_id}
-                          >
-                            <span className="participants-avatar">
-                              <AvatarImage
-                                src={resolveAvatarUrl(p?.avatar_url)}
-                                alt={participantDisplayName(p)}
-                                className="participants-avatar-image"
-                                fallback={participantAvatarLetter(p)}
-                              />
-                            </span>
-                            <span className="participants-user">
-                              <span className="participants-name">{participantDisplayName(p)}</span>
-                              {meta ? <span className="participants-meta">{meta}</span> : null}
-                            </span>
-                          </button>
-                        </li>
-                      );
-                    })}
-                  </ul>
+                  isAmpLuaTraining
+                    ? renderParticipantsByTeams(participantsReserveByTeam, 'r')
+                    : renderParticipantsList(participantsReserve, 'r')
                 ) : (
                   <div className="participants-empty">В резерве пока никого</div>
                 )}
