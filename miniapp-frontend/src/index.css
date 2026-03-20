@@ -696,7 +696,7 @@ button, input, select {
     overflow: hidden;
   }
   .screen { padding-top: 20px; }
-  #screen-home.screen { padding-top: 32px; }
+  #screen-home.screen { padding-top: 34px; }
   .hero-image { margin-top: -20px; }
   .tabbar { border-radius: 0 0 34px 34px; }
 }
