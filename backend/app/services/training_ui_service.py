@@ -369,22 +369,17 @@ def build_training_ui_payload(
     position_slots_payload = amplua_position_slots
     available_positions = [slot for slot in position_slots_payload if slot.get("has_free_slots")]
     if is_amplua and can_enroll_reserve and not available_positions:
-        # Для резерва ampLua разрешаем выбрать любую позицию, даже если в основе нет свободных слотов.
+        reserve_ready_slots = [slot for slot in amplua_position_slots if slot.get("has_free_reserve_slots")]
         position_slots_payload = [
             {
                 **slot,
-                "free": None,
-            }
-            for slot in amplua_position_slots
-        ]
-        available_positions = [
-            {
-                **slot,
-                "free": None,
+                "free": slot.get("free_reserve"),
+                "capacity": slot.get("capacity_reserve", slot.get("capacity")),
                 "reserve_only": True,
             }
-            for slot in position_slots_payload
+            for slot in reserve_ready_slots
         ]
+        available_positions = list(position_slots_payload)
 
     payload = {
         "capacity_main": capacity_main,
