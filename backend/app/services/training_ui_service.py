@@ -162,13 +162,15 @@ def _get_cancel_hours_before_training(db: Session) -> int:
     return max(0, min(value, 168))
 
 
-def _participant_payload(enrollment: Any, *, is_reserve: bool) -> dict[str, Any]:
+def _participant_payload(enrollment: Any, *, is_reserve: bool, is_admin_view: bool = False) -> dict[str, Any]:
     user_obj = getattr(enrollment, "user", None)
     user_id = getattr(enrollment, "user_id", None)
 
     first_name = _safe_text(getattr(user_obj, "first_name", None))
     last_name = _safe_text(getattr(user_obj, "last_name", None))
-    username = _safe_text(getattr(user_obj, "username", None))
+    raw_username = _safe_text(getattr(user_obj, "username", None))
+    is_telegram_public = bool(getattr(user_obj, "is_telegram_public", True))
+    username = raw_username if (is_admin_view or is_telegram_public) else ""
     avatar_url = _safe_text(getattr(user_obj, "avatar_url", None))
 
     full_name = " ".join(x for x in (first_name, last_name) if x).strip()
@@ -207,6 +209,7 @@ def build_training_ui_payload(
     user: Any | None,
     *,
     include_participants: bool = True,
+    is_admin_view: bool = False,
 ) -> Dict[str, Any]:
     training_id = getattr(training, "id", None)
     training_type = normalize_training_type(getattr(training, "training_type", None))
@@ -257,7 +260,7 @@ def build_training_ui_payload(
                     occupied_main += 1
 
                 if include_participants:
-                    participant = _participant_payload(e, is_reserve=is_reserve)
+                    participant = _participant_payload(e, is_reserve=is_reserve, is_admin_view=is_admin_view)
                     if is_reserve:
                         participants_reserve.append(participant)
                     else:

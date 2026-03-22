@@ -193,7 +193,7 @@ def delete_profile_avatar(
 def get_public_profile(
     user_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    _current_user: User = Depends(get_current_user),
 ) -> dict:
     """
     Публичный профиль другого пользователя (для раздела "Рейтинг").
@@ -219,8 +219,7 @@ def get_public_profile(
             detail={"error": {"code": "not_found", "message": "Пользователь не найден"}},
         )
 
-    is_self = user.id == current_user.id
-    username = user.username if (is_self or user.is_telegram_public) else None
+    username = user.username if user.is_telegram_public else None
 
     payload = UserPublicProfile(
         id=user.id,

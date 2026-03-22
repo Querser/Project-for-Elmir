@@ -41,7 +41,7 @@ class UserProfile(BaseModel):
 class UserPublicProfile(BaseModel):
     """
     Публичный профиль пользователя (для просмотра из рейтинга).
-    Telegram username отдаём только если is_telegram_public=True (или это self).
+    Telegram username отдаём только если is_telegram_public=True.
     """
     id: int
     avatar_url: Optional[str] = None

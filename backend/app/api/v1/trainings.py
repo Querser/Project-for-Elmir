@@ -155,9 +155,18 @@ def _to_training_read_ui_payload(
     *,
     request: Request | None = None,
     include_participants: bool = False,
+    is_admin_view: bool = False,
 ) -> dict[str, Any]:
     base = _normalize_json(_training_to_dict(training_obj))
-    ui = _normalize_json(build_training_ui_payload(db, training_obj, user, include_participants=include_participants))
+    ui = _normalize_json(
+        build_training_ui_payload(
+            db,
+            training_obj,
+            user,
+            include_participants=include_participants,
+            is_admin_view=is_admin_view,
+        )
+    )
     base.update(ui)
 
     base_api_url = ""
@@ -261,7 +270,14 @@ def list_admin_trainings(
         offset=skip,
     )
     payload = [
-        _to_training_read_ui_payload(db, t, None, request=request, include_participants=False)
+        _to_training_read_ui_payload(
+            db,
+            t,
+            None,
+            request=request,
+            include_participants=False,
+            is_admin_view=True,
+        )
         for t in (items or [])
     ]
     return {'items': payload, 'total': total, 'limit': limit, 'offset': skip}
@@ -277,7 +293,14 @@ def get_admin_training(
 ):
     _apply_no_store_headers(response)
     training = get_training_or_404(db=db, training_id=training_id)
-    return _to_training_read_ui_payload(db, training, None, request=request, include_participants=True)
+    return _to_training_read_ui_payload(
+        db,
+        training,
+        None,
+        request=request,
+        include_participants=True,
+        is_admin_view=True,
+    )
 
 
 @router.post('/media', response_model=dict)
@@ -323,7 +346,14 @@ def create_training_admin(
 ):
     _apply_no_store_headers(response)
     created = create_training(db=db, data=payload)
-    return _to_training_read_ui_payload(db, created, None, request=request, include_participants=True)
+    return _to_training_read_ui_payload(
+        db,
+        created,
+        None,
+        request=request,
+        include_participants=True,
+        is_admin_view=True,
+    )
 
 
 @router.patch('/{training_id}', response_model=TrainingReadUI)
@@ -338,7 +368,14 @@ def update_training_admin(
     _apply_no_store_headers(response)
     training = get_training_or_404(db=db, training_id=training_id)
     updated = update_training(db=db, training=training, data=payload)
-    return _to_training_read_ui_payload(db, updated, None, request=request, include_participants=True)
+    return _to_training_read_ui_payload(
+        db,
+        updated,
+        None,
+        request=request,
+        include_participants=True,
+        is_admin_view=True,
+    )
 
 
 @router.delete('/{training_id}', response_model=dict)
@@ -361,7 +398,14 @@ def cancel_training_admin(
 ):
     training = get_training_or_404(db=db, training_id=training_id)
     cancelled = cancel_training(db=db, training=training)
-    return _to_training_read_ui_payload(db, cancelled, None, request=request, include_participants=True)
+    return _to_training_read_ui_payload(
+        db,
+        cancelled,
+        None,
+        request=request,
+        include_participants=True,
+        is_admin_view=True,
+    )
 
 
 @router.post('/{training_id}/restore', response_model=TrainingReadUI)
@@ -373,7 +417,14 @@ def restore_training_admin(
 ):
     training = get_training_or_404(db=db, training_id=training_id)
     restored = restore_training(db=db, training=training)
-    return _to_training_read_ui_payload(db, restored, None, request=request, include_participants=True)
+    return _to_training_read_ui_payload(
+        db,
+        restored,
+        None,
+        request=request,
+        include_participants=True,
+        is_admin_view=True,
+    )
 
 
 @router.get('/{training_id}/participants.xlsx')
